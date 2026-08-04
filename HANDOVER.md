@@ -1,6 +1,6 @@
 # HANDOVER — 7seas-telemetrics
 
-Briefing for the next agent/contributor. State as of **v0.3.0, 2026-08-04**.
+Briefing for the next agent/contributor. State as of **v0.4.0, 2026-08-05**.
 
 ## What this is
 
@@ -18,15 +18,16 @@ gauges onto video and exports H.264 mp4. Owner: ruzbeh (GitHub:
 | `vkx.py` | Vakaros Atlas binary parser per the official spec (github.com/vakaros/vkx). Row 0x02 gives GNSS + NED quaternion → heading/pitch/roll. 0x0A wind is **apparent** → `awd`/`aws`; `awa` derived = AWD − HDG. Race-timer events (0x04) are parsed into `tele.race_events` but **unused so far** (auto-trim idea below). Unknown row keys resync by scanning for the next 0xFF page header. |
 | `gauges.py` | All gauge rendering. 1080p design space, scaled by frame height. Perf pattern: static faces drawn at 2x → cached at 1x; rotating parts (compass card, needles, dot) are prebuilt 1x sprites rotated per frame (rotation resampling = antialiasing); text is FreeType-AA at 1x. **Never draw large per-frame supersampled surfaces** — that was 70 ms/frame before this pattern (now ~16–23 ms). `HeelBar`/`DigitsBox`/`TrackMap` support per-axis stretch (`sx`/`sy`); circular gauges uniform only. `TrackMap` has `map_style` (none/street/satellite), `view_mode` (route/follow), `follow_m`. |
 | `maptiles.py` | Slippy-tile mosaics: OSM street / Esri World Imagery, disk cache in `%LOCALAPPDATA%\7seas-telemetrics\tiles`, ≤140 tiles, zoom auto ≤17, darkened for overlay contrast. `service.prepare(track, style, pad)` blocking, or async with callback. Respect OSM tile policy (User-Agent set, light use only — do NOT bulk download). |
-| `videoio.py` | ffmpeg probe (banner parse), frame extraction, realtime play stream (`-re`, 12 fps, rgb24 pipe), export: RGBA overlay frames piped into ffmpeg `overlay` filter at 15 fps; encoder auto-pick h264_qsv → h264_mf → libx264; audio copied with one aac-transcode retry on early mux failure. |
+| `videoio.py` | ffmpeg probe (banner parse, incl. source bitrate), frame extraction, realtime play stream (`-re`, 12 fps, rgb24 pipe), export: RGBA overlay frames piped into ffmpeg `overlay` filter; encoder auto-pick h264_qsv → h264_mf → libx264. `QUALITY_PRESETS` (high/medium/low) set output height, fps, overlay fps, CRF/ICQ and audio; `bitrate_cap()` = min(bpp budget, source bitrate × 1.6 × √shrink). **h264_qsv needs `-b:v` alongside `-global_quality`** or it ignores `-maxrate` and overshoots ~35%. Overlay is composed at the *output* size, so low quality also renders ~3x faster. |
 | `gui.py` | tkinter single-window editor. Threads do all ffmpeg/parse/tile work; results come back via `self.q` polled every 80 ms — **never touch tk from worker threads**. `tele_full` vs `tele` (trimmed view); `offset = tele.t_start + user_off`. Known tk gotcha handled in `_on_scrub`: `Scale.set()` fires its command **at idle**, so programmatic-echo values are ignored by comparing to `cur_t`. |
-| `cli.py` | `--selftest` (synthetic end-to-end, logs to `%TEMP%\7seas_log.txt`), `--export` headless, GUI default. |
-| `project.py` | `.7seas.json` save/load (paths, mapping, offset, trim, maneuvers, gauge layout incl. stretch + map settings). |
+| `cli.py` | `--selftest` (synthetic end-to-end, logs to `%TEMP%\7seas_log.txt`), `--export` headless, GUI default. Both take `--quality`. |
+| `project.py` | `.7seas.json` (v3) save/load (paths, mapping, offset, trim, maneuvers, quality preset, gauge layout incl. stretch + map settings). |
 
 ## Build & test
 
 ```powershell
-.venv\Scripts\python main.py --selftest      # end-to-end, ~90 s
+.venv\Scripts\python main.py --selftest      # end-to-end, ~40 s
+.venv\Scripts\python main.py --selftest --quality high   # per-preset check
 .\build.ps1                                  # → dist\7seas-telemetrics.exe (windowed)
 dist\7seas-telemetrics.exe --selftest        # verify the bundle; exit code + %TEMP%\7seas_log.txt
 ```
@@ -35,7 +36,12 @@ Scratch test suites used during development (unit: VKX round-trip, trim,
 maneuver classification, tile math; GUI smoke with hidden window incl.
 playback and drag) lived in the session scratchpad — worth recreating as
 `tests/` under pytest. Measured perf on the dev machine (i5-8350U + UHD620,
-QSV): 1.2–2.2× realtime for 1080p30 export depending on thermals.
+QSV): 2.0× realtime at HIGH, 3.4× at MEDIUM, 5.6× at LOW.
+
+Preset sizing verified against a 1080p30 source at ~1.1 Mbps (the shape of a
+300 MB / 38 min phone clip): HIGH ≈ 395 MB, MEDIUM ≈ 242 MB, LOW ≈ 85 MB for
+38 minutes — v0.3.0 produced 1.8 GB for the same input. Note the synthetic
+`testsrc2` clip is compression-hostile, so real footage lands lower.
 
 ## Conventions & invariants
 
@@ -74,6 +80,12 @@ QSV): 1.2–2.2× realtime for 1080p30 export depending on thermals.
   only apparent wind is logged.
 - Real pytest suite from the scratch tests; CI via GitHub Actions.
 - Course-up option for the follow map; wake/laylines; polar overlays.
+- H.265/AV1 output. Deliberately *not* done in v0.4.0: the container
+  (mp4/mkv/webm) is worth <0.1% of file size, so only the codec matters, and
+  H.265 buys ~30–40% at equal quality but software encoding a 38 min clip
+  takes hours on this class of laptop, while HEVC playback on Windows needs
+  a codec the user may not have. Worth adding as a fourth option *gated on
+  `hevc_qsv` probing OK* — hardware HEVC is fast and free here.
 - GitHub Release automation for the exe (dist/ is gitignored on purpose).
 
 ## Repo / publishing state
@@ -83,4 +95,4 @@ branch `main`), MIT license, credits to walkersutton/cyclemetry and Claude
 Code in README. GitHub CLI is installed at
 `C:\Program Files\GitHub CLI\gh.exe` and authenticated as `pishi-ishi`
 (keyring). `dist/` is gitignored — ship the exe via GitHub Releases:
-`gh release create v0.3.0 dist\7seas-telemetrics.exe --title "v0.3.0"`.
+`gh release create v0.4.0 dist\7seas-telemetrics.exe --title "v0.4.0"`.

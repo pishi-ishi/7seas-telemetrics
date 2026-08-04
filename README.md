@@ -50,7 +50,20 @@ No install needed. First launch takes a few seconds (self-extracting bundle).
    street OSM / satellite Esri — tiles fetched once, cached, attributed)
    and the **view**: whole route, or **follow-boat window** (500 m / 1 km /
    2 km) that pans with the boat. Works in the render, not just preview.
-8. **RENDER VIDEO** — H.264 .mp4 next to your source video by default.
+8. **Quality — HIGH / MEDIUM / LOW** — picks the output size. The line
+   underneath shows the resolution, frame rate and estimated file size for
+   the loaded video, so you can see the cost before rendering.
+
+   | | Resolution | Frame rate | Typical size vs. a 300 MB / 38 min source |
+   |---|---|---|---|
+   | HIGH | source, up to 1080p | 30 fps | ≈ 400 MB |
+   | MEDIUM *(default)* | up to 720p | 24 fps | ≈ 240 MB |
+   | LOW | up to 480p | 15 fps | ≈ 85 MB |
+
+   The encoder also holds its bitrate near the source's own — re-encoding a
+   lean clip at a much higher bitrate only preserves its artifacts in
+   greater fidelity.
+9. **RENDER VIDEO** — H.264 .mp4 next to your source video by default.
    Intel QuickSync hardware encoding is used automatically when available.
 
 Built-in gauges: compass card (HDG), speed dial (SOG), heel bar
@@ -59,7 +72,8 @@ wind angle dial (AWA, port/starboard sectors), TWS & AWS readouts, track
 map with maneuver pointers and map background, digits box (any stream).
 
 **Save project…** stores file paths, column mapping, sync offset, trim,
-maneuvers and gauge layout in a `.7seas.json` you can reload later.
+maneuvers, gauge layout and the quality preset in a `.7seas.json` you can
+reload later.
 
 ## Command line
 
@@ -67,17 +81,24 @@ maneuvers and gauge layout in a `.7seas.json` you can reload later.
 7seas-telemetrics.exe --selftest            # end-to-end synthetic test
 7seas-telemetrics.exe --export --video V.mp4 --data log.vkx
                       [--offset start|meta|SECONDS] [--out OUT.mp4]
-                      [--project saved.7seas.json]
+                      [--quality high|medium|low] [--project saved.7seas.json]
 ```
 
 The app is windowed, so CLI runs log to `%TEMP%\7seas_log.txt`.
 
 ## Performance
 
-Measured on an i5-8350U + UHD 620: 1080p30 export runs at ~2.2x realtime
-with QuickSync — a 60-minute video takes ≈ 28 minutes. Software x264
-fallback is ~1.4x realtime. RAM use is modest (< 1 GB); overlay frames are
-piped, never written to disk.
+Measured on an i5-8350U + UHD 620 with QuickSync — lower quality settings
+also render faster, because the gauges are composed at the output size:
+
+| Quality | Speed | 60-minute video |
+|---|---|---|
+| HIGH (1080p30) | ~2.0x realtime | ≈ 30 min |
+| MEDIUM (720p24) | ~3.4x realtime | ≈ 18 min |
+| LOW (480p15) | ~5.6x realtime | ≈ 11 min |
+
+Software x264 fallback is roughly 1.5x slower. RAM use is modest (< 1 GB);
+overlay frames are piped, never written to disk.
 
 ## Developing
 

@@ -87,7 +87,8 @@ class App:
         self.preview_frame = None
         self.placeholder = None
         self.encoder = None
-        self.overlay_fps = videoio.OVERLAY_FPS_DEFAULT
+        self.quality = videoio.QUALITY_DEFAULT
+        self.overlay_fps = videoio.get_quality(self.quality).overlay_fps
         self.exporting = False
         self.cancel_evt = threading.Event()
         self._pending_project = None
@@ -103,6 +104,7 @@ class App:
         self.q = queue.Queue()
 
         self._build_ui()
+        self._update_quality_ui()
         self._draw_placeholder_text()
         threading.Thread(target=self._detect_encoder, daemon=True).start()
         root.after(80, self._poll)
@@ -232,9 +234,22 @@ class App:
                  insertbackground=TEXT, relief="flat", font=F_MONO).pack(
             side="left", fill="x", expand=True, ipady=3)
         _btn(row, "…", self.browse_out).pack(side="left", padx=(6, 0))
+        row = tk.Frame(f, bg=PANEL)
+        row.pack(fill="x", pady=(5, 0))
+        tk.Label(row, text="QUALITY", font=F_SECTION, bg=PANEL, fg=DIM).pack(
+            side="left", padx=(0, 6))
+        self.btn_quality = {}
+        for key in ("high", "medium", "low"):
+            b = _btn(row, videoio.QUALITY_PRESETS[key].label,
+                     lambda k=key: self.set_quality(k))
+            b.pack(side="left", fill="x", expand=True, padx=(0, 4))
+            self.btn_quality[key] = b
+        self.lbl_quality = tk.Label(f, text="", font=F_MONO, bg=PANEL, fg=DIM,
+                                    anchor="w")
+        self.lbl_quality.pack(fill="x", pady=(3, 0))
         self.lbl_enc = tk.Label(f, text="encoder: detecting…", font=F_MONO,
                                 bg=PANEL, fg=DIM, anchor="w")
-        self.lbl_enc.pack(fill="x", pady=(3, 0))
+        self.lbl_enc.pack(fill="x", pady=(1, 0))
         row = tk.Frame(f, bg=PANEL)
         row.pack(fill="x", pady=(5, 0))
         self.btn_render = _btn(row, "RENDER VIDEO", self.start_export, accent=True)
@@ -402,6 +417,7 @@ class App:
         self.scale.configure(to=max(0.1, info.duration))
         self._scale_guard = False
         self.lbl_dur.configure(text=self._fmt_t(info.duration))
+        self._update_quality_ui()
         if not self.var_out.get():
             self.var_out.set(videoio.default_output_path(path))
         if not self._pending_project and self.tele and self.vinfo.creation_time:
@@ -420,7 +436,7 @@ class App:
             self.maneuvers = list(pend.get("maneuvers") or [])
             self.gauges = pend.get("gauge_objects") or gauges.default_gauges(tele)
             self.user_off = float(pend.get("user_offset", 0.0))
-            self.overlay_fps = int(pend.get("overlay_fps", self.overlay_fps))
+            self.set_quality(pend.get("quality") or self.quality)
             self._apply_view()
         else:
             if not remap:
@@ -1126,9 +1142,35 @@ class App:
         if p:
             self.var_out.set(p)
 
+    def set_quality(self, key):
+        if self.exporting:
+            return
+        self.quality = key
+        self.overlay_fps = videoio.get_quality(key).overlay_fps
+        self._update_quality_ui()
+
+    def _update_quality_ui(self):
+        for key, b in self.btn_quality.items():
+            on = key == self.quality
+            b.configure(bg=ACCENT if on else PANEL2, font=F_UI_B if on else F_UI,
+                        activebackground=ACCENT_HOVER if on else PANEL3)
+        q = videoio.get_quality(self.quality)
+        if self.vinfo:
+            w, h = videoio.target_dims(self.vinfo, q)
+            mb = videoio.estimate_size_mb(self.vinfo, q)
+            size = f"{mb:,.1f}" if mb < 100 else f"{mb:,.0f}"
+            self.lbl_quality.configure(
+                text=f"{w}x{h} · {videoio.target_fps(self.vinfo, q):.4g} fps · "
+                     f"≈{size} MB")
+        else:
+            self.lbl_quality.configure(
+                text=f"≤{q.max_h}p · {q.fps} fps · gauges at {q.overlay_fps} fps")
+
     def _export_buttons(self, running):
         self.btn_render.configure(state="disabled" if running else "normal")
         self.btn_cancel.configure(state="normal" if running else "disabled")
+        for b in self.btn_quality.values():
+            b.configure(state="disabled" if running else "normal")
 
     def start_export(self):
         if self.exporting:
@@ -1160,7 +1202,7 @@ class App:
         info, tele = self.vinfo, self.tele
         tele.maneuvers = self.maneuvers
         glist = list(self.gauges)
-        offset, ofps, enc = self.offset, self.overlay_fps, self.encoder
+        offset, qual, enc = self.offset, self.quality, self.encoder
         start = [0.0]
 
         def prog(done, total):
@@ -1182,7 +1224,7 @@ class App:
                         maptiles.service.prepare(tele.track, g.map_style,
                                                  g.map_pad())
                 elapsed = videoio.export(info, tele, glist, offset, out,
-                                         overlay_fps=ofps, encoder=enc,
+                                         quality=qual, encoder=enc,
                                          progress=prog, cancel=self.cancel_evt)
                 self.q.put(("export_done", out, elapsed))
             except videoio.ExportCancelled:
@@ -1210,7 +1252,11 @@ class App:
         self.exporting = False
         self._export_buttons(False)
         self.pbar.configure(value=1000)
-        self.status(f"saved ({self._fmt_t(elapsed)}): {out}", OK)
+        try:
+            size = f", {os.path.getsize(out) / (1024 * 1024):,.0f} MB"
+        except OSError:
+            size = ""
+        self.status(f"saved ({self._fmt_t(elapsed)}{size}): {out}", OK)
         self.btn_folder.pack(fill="x", pady=(6, 0))
 
     def _on_export_err(self, msg):
@@ -1241,7 +1287,7 @@ class App:
             full.mapping if (full and full.kind == "csv") else None,
             full.speed_units if full else {},
             self.user_off, self.overlay_fps, self.gauges,
-            trim=self.trim, maneuvers=self.maneuvers)
+            trim=self.trim, maneuvers=self.maneuvers, quality=self.quality)
         self.status(f"project saved: {os.path.basename(p)}", OK)
 
     def load_project(self):

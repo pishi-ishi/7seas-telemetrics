@@ -102,7 +102,13 @@ def cmd_export(args, log):
         offset = resolve_offset(args.offset, tele, info)
     out = args.out or videoio.default_output_path(video)
     enc = videoio.pick_encoder()
-    log(f"encoder: {enc}; output: {out}")
+    quality = args.quality or (doc and doc.get("quality")) or videoio.QUALITY_DEFAULT
+    q = videoio.get_quality(quality)
+    ofps = args.overlay_fps or q.overlay_fps
+    dims = videoio.target_dims(info, q)
+    log(f"encoder: {enc}; quality: {q.key} ({dims[0]}x{dims[1]} @ "
+        f"{videoio.target_fps(info, q):.4g} fps, "
+        f"est. {videoio.estimate_size_mb(info, q):,.0f} MB); output: {out}")
     t0 = time.time()
     last = [0.0]
 
@@ -111,13 +117,14 @@ def cmd_export(args, log):
         if now - last[0] >= 5.0:
             last[0] = now
             pct = 100.0 * done / total
-            speed = (done / args.overlay_fps) / max(1e-9, now - t0)
+            speed = (done / ofps) / max(1e-9, now - t0)
             log(f"  {pct:5.1f}%  ({speed:.2f}x realtime)")
 
-    elapsed = videoio.export(info, tele, glist, offset, out,
+    elapsed = videoio.export(info, tele, glist, offset, out, quality=q,
                              overlay_fps=args.overlay_fps, encoder=enc,
                              progress=prog)
-    log(f"done in {elapsed:.1f}s ({info.duration / elapsed:.2f}x realtime): {out}")
+    log(f"done in {elapsed:.1f}s ({info.duration / elapsed:.2f}x realtime): "
+        f"{out} ({os.path.getsize(out) / (1024 * 1024):,.1f} MB)")
     return 0
 
 
@@ -154,12 +161,18 @@ def cmd_selftest(args, log):
 
     glist = gauges.default_gauges(tele)
     enc = videoio.pick_encoder()
-    log(f"4/5 exporting with encoder {enc} ...")
-    elapsed = videoio.export(info, tele, glist, tele.t_start, out,
+    q = videoio.get_quality(args.quality)
+    log(f"4/5 exporting with encoder {enc}, quality {q.key} ...")
+    elapsed = videoio.export(info, tele, glist, tele.t_start, out, quality=q,
                              overlay_fps=args.overlay_fps, encoder=enc)
     speed = info.duration / elapsed
     log(f"   export took {elapsed:.1f}s = {speed:.2f}x realtime"
         f" -> 60 min video est. {60 / speed:.0f} min")
+    in_mb = os.path.getsize(clip) / (1024 * 1024)
+    out_mb = os.path.getsize(out) / (1024 * 1024)
+    log(f"   size: in {in_mb:.1f} MB -> out {out_mb:.1f} MB "
+        f"({out_mb / in_mb:.2f}x, est. was "
+        f"{videoio.estimate_size_mb(info, q):.1f} MB)")
 
     out_info = videoio.probe(out)
     ok_dur = abs(out_info.duration - info.duration) < 2.5
@@ -194,7 +207,10 @@ def main(argv=None):
     ap.add_argument("--offset", default=None,
                     help="'start' (default), 'meta', or seconds into the data "
                          "at video t=0")
-    ap.add_argument("--overlay-fps", type=int, default=15)
+    ap.add_argument("--quality", choices=("high", "medium", "low"),
+                    default=None, help="output size preset (default: medium)")
+    ap.add_argument("--overlay-fps", type=int, default=None,
+                    help="override the preset's gauge frame rate")
     ap.add_argument("--keep", action="store_true", help="keep selftest workdir")
     args = ap.parse_args(argv)
 
