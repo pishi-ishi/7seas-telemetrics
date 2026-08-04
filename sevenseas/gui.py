@@ -211,12 +211,18 @@ class App:
         row.pack(fill="x", pady=(4, 0))
         _btn(row, "Add readout…", self.add_readout).pack(side="left")
         _btn(row, "Reset layout", self.reset_layout).pack(side="left", padx=(6, 0))
+        f = self._section(self.left, "Maneuvers · tacks & gybes")
         row = tk.Frame(f, bg=PANEL)
-        row.pack(fill="x", pady=(4, 0))
-        _btn(row, "Maneuvers…", self.open_maneuvers).pack(side="left")
-        self.lbl_man = tk.Label(row, text="", font=F_MONO, bg=PANEL, fg=DIM,
+        row.pack(fill="x")
+        _btn(row, "Auto-detect", self.man_autodetect).pack(side="left")
+        _btn(row, "T @ cursor", lambda: self.man_add("T")).pack(
+            side="left", padx=(6, 0))
+        _btn(row, "G @ cursor", lambda: self.man_add("G")).pack(
+            side="left", padx=(6, 0))
+        _btn(row, "Edit…", self.open_maneuvers).pack(side="left", padx=(6, 0))
+        self.lbl_man = tk.Label(f, text="", font=F_MONO, bg=PANEL, fg=DIM,
                                 anchor="w")
-        self.lbl_man.pack(side="left", padx=(8, 0))
+        self.lbl_man.pack(fill="x", pady=(3, 0))
 
         f = self._section(self.left, "Export")
         row = tk.Frame(f, bg=PANEL)
@@ -260,6 +266,7 @@ class App:
         self.canvas.bind("<ButtonRelease-1>", self._on_release)
         self.canvas.bind("<Motion>", self._on_hover)
         self.canvas.bind("<Button-3>", self._on_context)
+        self.canvas.bind("<MouseWheel>", self._on_wheel)
 
         self.marks = tk.Canvas(center, bg=PANEL, height=16, highlightthickness=0,
                                cursor="hand2")
@@ -354,6 +361,10 @@ class App:
                 elif kind == "pdone":
                     if msg[1] == self._play_gen:
                         self.play_stop()
+                elif kind == "map_ready":
+                    self._refresh_overlay()
+                elif kind == "status":
+                    self.status(msg[1], MUTED)
                 elif kind == "encoder":
                     self.encoder = msg[1]
                     self.lbl_enc.configure(
@@ -420,6 +431,10 @@ class App:
                 self.gauges = gauges.default_gauges(self.tele)
             if self.vinfo and self.vinfo.creation_time and not remap:
                 self.sync_meta(quiet=True)
+            if not remap:
+                # detect tacks/gybes immediately so pointers show up
+                self._set_maneuvers(telemetry.detect_maneuvers(
+                    self.tele, tuple(self.t_rng), tuple(self.g_rng)))
         n = len(tele.streams)
         rng = tele.t_end - tele.t_start
         self.lbl_data.configure(
@@ -765,6 +780,32 @@ class App:
         self._redraw_marks()
         self._refresh_overlay()
 
+    def _set_maneuvers(self, mans):
+        self.maneuvers = mans
+        self._maneuvers_changed()
+
+    def man_autodetect(self):
+        if not self.tele:
+            messagebox.showinfo(APP_NAME, "Load telemetry data first.")
+            return
+        found = telemetry.detect_maneuvers(self.tele, tuple(self.t_rng),
+                                           tuple(self.g_rng))
+        self._set_maneuvers(found)
+        if not found:
+            self.status("no maneuvers found — adjust ranges in Edit…", WARN)
+
+    def man_add(self, kind):
+        if not self.tele:
+            messagebox.showinfo(APP_NAME, "Load telemetry data first.")
+            return
+        self.maneuvers.append({"t": self.offset + self.frame_t, "kind": kind,
+                               "mag": 0.0, "enabled": True})
+        self._maneuvers_changed()
+
+    def _map_ready(self):
+        """Called from a tile-fetch thread when a mosaic becomes available."""
+        self.q.put(("map_ready",))
+
     def open_maneuvers(self):
         if not self.tele:
             messagebox.showinfo(APP_NAME, "Load telemetry data first.")
@@ -872,6 +913,9 @@ class App:
 
     # ================= gauges =================
     def _rebuild_gauge_list(self):
+        for g in self.gauges:
+            if g.KIND == "track_map":
+                g.on_map_ready = self._map_ready
         for w in self.gauge_box.winfo_children():
             w.destroy()
         for g in self.gauges:
@@ -987,6 +1031,16 @@ class App:
             return
         self.canvas.configure(cursor="fleur" if self._hit(e.x, e.y) else "")
 
+    def _on_wheel(self, e):
+        """Mouse wheel over a gauge zooms it (uniform scale)."""
+        hit = self._hit(e.x, e.y)
+        if not hit:
+            return
+        g = hit[0]
+        factor = 1.1 if e.delta > 0 else 1 / 1.1
+        g.size = max(0.5, min(3.0, g.size * factor))
+        self._refresh_overlay()
+
     def _on_context(self, e):
         hit = self._hit(e.x, e.y)
         menu = tk.Menu(self.root, tearoff=0, bg=PANEL2, fg=TEXT,
@@ -1022,6 +1076,43 @@ class App:
                                  command=lambda: adj("sy", 1.2, 0.6, 2.5))
                 menu.add_command(label="Shorter",
                                  command=lambda: adj("sy", 1 / 1.2, 0.6, 2.5))
+            if g.KIND == "track_map":
+                def set_map(style, gg=g):
+                    gg.map_style = style
+                    gg.on_map_ready = self._map_ready
+                    if style != "none" and self.tele and self.tele.track:
+                        self.status("fetching map tiles…", MUTED)
+                        gg.mosaic(self.tele)  # kicks async fetch
+                    self._refresh_overlay()
+
+                def set_view(mode, meters, gg=g):
+                    gg.view_mode = mode
+                    gg.follow_m = meters
+                    if gg.map_style != "none":
+                        gg.mosaic(self.tele)
+                    self._refresh_overlay()
+                mmap = tk.Menu(menu, tearoff=0, bg=PANEL2, fg=TEXT,
+                               activebackground=ACCENT, activeforeground=TEXT)
+                for lbl2, st in (("None", "none"), ("Street (OSM)", "street"),
+                                 ("Satellite (Esri)", "satellite")):
+                    mark = "✓ " if g.map_style == st else "   "
+                    mmap.add_command(label=mark + lbl2,
+                                     command=lambda s=st: set_map(s))
+                menu.add_cascade(label="Map background", menu=mmap)
+                mview = tk.Menu(menu, tearoff=0, bg=PANEL2, fg=TEXT,
+                                activebackground=ACCENT, activeforeground=TEXT)
+                opts = [("Whole route", "route", g.follow_m),
+                        ("Follow boat · 500 m", "follow", 500.0),
+                        ("Follow boat · 1 km", "follow", 1000.0),
+                        ("Follow boat · 2 km", "follow", 2000.0)]
+                for lbl2, mode, meters in opts:
+                    cur = (g.view_mode == mode and
+                           (mode == "route" or abs(g.follow_m - meters) < 1))
+                    mark = "✓ " if cur else "   "
+                    mview.add_command(
+                        label=mark + lbl2,
+                        command=lambda m=mode, mm=meters: set_view(m, mm))
+                menu.add_cascade(label="Map view", menu=mview)
             menu.add_separator()
         menu.add_command(label="Reset layout", command=self.reset_layout)
         menu.tk_popup(e.x_root, e.y_root)
@@ -1082,6 +1173,14 @@ class App:
 
         def work():
             try:
+                # make sure map tiles are on hand before frames start flowing
+                from . import maptiles
+                for g in glist:
+                    if (g.KIND == "track_map" and g.enabled
+                            and g.map_style != "none" and tele.track):
+                        self.q.put(("status", "fetching map tiles…"))
+                        maptiles.service.prepare(tele.track, g.map_style,
+                                                 g.map_pad())
                 elapsed = videoio.export(info, tele, glist, offset, out,
                                          overlay_fps=ofps, encoder=enc,
                                          progress=prog, cancel=self.cancel_evt)
@@ -1180,8 +1279,9 @@ class App:
         rows = [("time", "Timestamp *"), ("lat", "Latitude"), ("lon", "Longitude"),
                 ("sog", "Speed (SOG)"), ("heading", "Heading"),
                 ("cog", "Course (COG)"), ("roll", "Roll / heel / tilt"),
-                ("pitch", "Pitch"), ("twd", "Wind direction"),
-                ("tws", "Wind speed")]
+                ("pitch", "Pitch"), ("twd", "True wind direction"),
+                ("tws", "True wind speed"), ("awa", "Apparent wind angle"),
+                ("awd", "Apparent wind dir"), ("aws", "Apparent wind speed")]
         choices = ["(none)"] + list(tele.columns)
         auto = telemetry.Telemetry.auto_map(tele.columns)
         combos = {}
@@ -1194,7 +1294,7 @@ class App:
             cb.grid(row=i, column=1, padx=(10, 0), pady=2)
             combos[stream] = cb
         units = {}
-        for j, stream in enumerate(("sog", "tws")):
+        for j, stream in enumerate(("sog", "tws", "aws")):
             tk.Label(frm, text=f"{stream.upper()} unit", bg=PANEL, fg=MUTED,
                      font=F_UI, anchor="w").grid(row=len(rows) + j, column=0,
                                                  sticky="w", pady=2)

@@ -189,6 +189,9 @@ class Gauge:
                 "size": self.size, "sx": round(self.sx, 3),
                 "sy": round(self.sy, 3), "enabled": self.enabled}
 
+    def _load_extra(self, d):
+        """Subclass hook for extra persisted settings."""
+
     @staticmethod
     def from_dict(d):
         cls = GAUGE_KINDS.get(d.get("kind"))
@@ -201,6 +204,7 @@ class Gauge:
         g.sx = float(d.get("sx", 1.0))
         g.sy = float(d.get("sy", 1.0))
         g.enabled = bool(d.get("enabled", True))
+        g._load_extra(d)
         return g
 
 
@@ -330,6 +334,76 @@ class NeedleCompass(Gauge):
         dr.text((cx, 205 * ky), fmt_value(v, angular=True),
                 font=font("monob", 23 * ky),
                 fill=TEXT if v is not None else DIM, anchor="mm")
+
+
+class WindAngleDial(Gauge):
+    """Bow-up apparent-wind-angle dial: port sector crimson, starboard
+    green, signed digits (e.g. 42°S). Values are stored 0-360; displayed
+    as ±180 relative to the bow."""
+
+    KIND = "wind_angle"
+    CX, CY = 115, 112
+
+    def __init__(self, stream="awa", label="AWA", **kw):
+        super().__init__(stream, label, **kw)
+
+    def _draw_face(self, dr, img, tele, w2, h2):
+        k2 = h2 / self.DESIGN_H_
+        self._panel(dr, w2, h2, k2)
+        self._label_txt(dr, k2)
+        cx, cy = self.CX * k2, self.CY * k2
+        r_out = 74 * k2
+        r_arc = 79 * k2
+        box = [cx - r_arc, cy - r_arc, cx + r_arc, cy + r_arc]
+        # PIL arc angles: clockwise from 3 o'clock = azimuth - 90
+        dr.arc(box, 10 - 90, 170 - 90, fill=(34, 197, 94, 130),
+               width=max(2, int(3 * k2)))          # starboard sector
+        dr.arc(box, 190 - 90, 350 - 90, fill=(220, 20, 60, 130),
+               width=max(2, int(3 * k2)))          # port sector
+        for a in range(0, 360, 10):
+            if a == 0:
+                continue
+            major = a % 30 == 0
+            r_in = (64 if major else 69) * k2
+            dr.line([az_xy(cx, cy, r_in, a), az_xy(cx, cy, r_out, a)],
+                    fill=MUTED if major else DIM,
+                    width=max(1, int((2 if major else 1.2) * k2)))
+        for a in (45, 90, 135):
+            for sgn in (1, -1):
+                tx, ty = az_xy(cx, cy, 54 * k2, sgn * a)
+                dr.text((tx, ty), str(a), font=font("ui", 10.5 * k2),
+                        fill=DIM, anchor="mm")
+        # bow marker at 0
+        top = cy - r_out
+        dr.polygon([(cx, top + 2 * k2), (cx - 6 * k2, top - 8 * k2),
+                    (cx + 6 * k2, top - 8 * k2)], fill=TEXT)
+
+    def _needle(self, ky):
+        def build(dr, img, px2, k2):
+            c = px2 / 2.0
+            draw_needle(dr, c, c, 0, 56 * k2, 16 * k2, 6.5 * k2, TEXT)
+            dr.ellipse([c - 5 * k2, c - 5 * k2, c + 5 * k2, c + 5 * k2],
+                       fill=ACCENT)
+        return self._sprite("needle", ky, 120, build)
+
+    def _draw_dynamic(self, dr, img, tele, t, w, h, kx, ky):
+        cx, cy = self.CX * ky, self.CY * ky
+        v = tele.sample(self.stream, t) if tele else None
+        d = None
+        if v is not None:
+            d = ((v + 180.0) % 360.0) - 180.0
+            spr = self._needle(ky).rotate(-d, resample=Image.BILINEAR)
+            sz = spr.size[0]
+            img.alpha_composite(spr, (int(cx - sz / 2), int(cy - sz / 2)))
+            dr = ImageDraw.Draw(img)
+        if d is None:
+            txt, col = "---", DIM
+        else:
+            side = "S" if d > 0 else ("P" if d < 0 else "")
+            txt = f"{abs(d):.0f}°{side}"
+            col = GREEN if d > 0 else (ACCENT if d < 0 else TEXT)
+        dr.text((cx, 205 * ky), txt, font=font("monob", 23 * ky),
+                fill=col, anchor="mm")
 
 
 class SpeedDial(Gauge):
@@ -510,8 +584,10 @@ class HeelBar(Gauge):
 
 
 class TrackMap(Gauge):
-    """Mini map: full route + progress trail + current position +
-    numbered maneuver pointers (T1, G2, ...)."""
+    """Mini map: route + progress trail + current position + numbered
+    maneuver pointers (T1, G2, ...). Optional OSM/satellite background
+    (maptiles module) and two views: whole route or a follow-boat window
+    of `follow_m` meters."""
 
     KIND = "track_map"
     DESIGN_W = 260
@@ -522,61 +598,190 @@ class TrackMap(Gauge):
 
     def __init__(self, stream="track", label="TRACK", **kw):
         super().__init__(stream, label, **kw)
+        self.map_style = "none"      # "none" | "street" | "satellite"
+        self.view_mode = "route"     # "route" | "follow"
+        self.follow_m = 1000.0
+        self.on_map_ready = None     # GUI callback when tiles arrive
         self._proj = None
         self._proj_key = None
+        self._dec = None
+        self._dec_key = None
+        self._mask_cache = {}
 
     def available(self, tele):
         return tele is not None and tele.track is not None
 
+    # ---- persistence ----
+    def to_dict(self):
+        d = super().to_dict()
+        d.update({"map_style": self.map_style, "view_mode": self.view_mode,
+                  "follow_m": self.follow_m})
+        return d
+
+    def _load_extra(self, d):
+        self.map_style = d.get("map_style", "none")
+        self.view_mode = d.get("view_mode", "route")
+        self.follow_m = float(d.get("follow_m", 1000.0))
+
+    # ---- map + geometry helpers ----
+    def map_pad(self):
+        """Meters of bbox padding the mosaic needs for this gauge's view."""
+        return max(800.0, self.follow_m * 0.6 + 400.0)
+
+    def mosaic(self, tele):
+        """Cached mosaic, kicking off an async fetch when missing."""
+        if self.map_style == "none" or not (tele and tele.track):
+            return None
+        from . import maptiles
+        pad = self.map_pad()
+        m = maptiles.service.get(tele.track, self.map_style, pad)
+        if m is None:
+            maptiles.service.prepare(tele.track, self.map_style, pad,
+                                     callback=self.on_map_ready or (lambda: None))
+        return m
+
     def _face_key(self, tele, w, h):
         n = len(tele.track[0]) if (tele and tele.track) else 0
-        return (w, h, id(tele), n)
+        return (w, h, id(tele), n, self.map_style, self.view_mode,
+                id(self.mosaic(tele)))
+
+    def _inner(self, w, h, ky):
+        return 8 * ky, 30 * ky, w - 8 * ky, h - 8 * ky
+
+    def _mask(self, iw, ih, ky):
+        key = (iw, ih)
+        m = self._mask_cache.get(key)
+        if m is None:
+            if len(self._mask_cache) > 4:
+                self._mask_cache.clear()
+            m = Image.new("L", (max(1, int(iw)), max(1, int(ih))), 0)
+            ImageDraw.Draw(m).rounded_rectangle(
+                [0, 0, iw - 1, ih - 1], radius=9 * ky, fill=255)
+            self._mask_cache[key] = m
+        return m
+
+    def _decimated(self, tele):
+        key = (id(tele), len(tele.track[0]))
+        if key != self._dec_key:
+            ts, lats, lons = tele.track
+            stride = max(1, len(ts) // self.MAX_PTS)
+            self._dec = (ts[::stride], lats[::stride], lons[::stride])
+            self._dec_key = key
+        return self._dec
 
     def _project(self, tele, w, h, ky):
-        """1x-pixel-space projection of the (decimated) track."""
-        key = (id(tele), len(tele.track[0]), w, h)
+        """Route-mode projection: track fitted into the panel; aligned to
+        the mosaic when a map background is active."""
+        m = self.mosaic(tele)
+        key = (id(tele), len(tele.track[0]), w, h, id(m))
         if key == self._proj_key:
             return self._proj
-        ts, lats, lons = tele.track
-        stride = max(1, len(ts) // self.MAX_PTS)
-        ts = ts[::stride]
-        lats = lats[::stride]
-        lons = lons[::stride]
-        midlat = math.radians((min(lats) + max(lats)) / 2.0)
-        cosm = math.cos(midlat)
-        xs = [lo * cosm for lo in lons]
-        x0, x1 = min(xs), max(xs)
-        y0, y1 = min(lats), max(lats)
+        ts, lats, lons = self._decimated(tele)
         pad, top = 26 * ky, 36 * ky
-        avail_w = w - 2 * pad
-        avail_h = h - top - pad
-        span_x = max(x1 - x0, 1e-9)
-        span_y = max(y1 - y0, 1e-9)
-        s = min(avail_w / span_x, avail_h / span_y)
-        offx = pad + (avail_w - span_x * s) / 2.0
-        offy = top + (avail_h - span_y * s) / 2.0
+        avail_w = max(1.0, w - 2 * pad)
+        avail_h = max(1.0, h - top - pad)
+        if m is not None:
+            mpts = [m.px(la, lo) for la, lo in zip(lats, lons)]
+            x0 = min(p[0] for p in mpts)
+            x1 = max(p[0] for p in mpts)
+            y0 = min(p[1] for p in mpts)
+            y1 = max(p[1] for p in mpts)
+            s = min(avail_w / max(x1 - x0, 1e-9),
+                    avail_h / max(y1 - y0, 1e-9))
+            offx = pad + (avail_w - (x1 - x0) * s) / 2.0
+            offy = top + (avail_h - (y1 - y0) * s) / 2.0
 
-        def to_pt(lat, lon):
-            return offx + (lon * cosm - x0) * s, offy + (y1 - lat) * s
+            def to_pt(lat, lon, _m=m, _s=s, _x0=x0, _y0=y0,
+                      _ox=offx, _oy=offy):
+                mx, my = _m.px(lat, lon)
+                return _ox + (mx - _x0) * _s, _oy + (my - _y0) * _s
 
+            bg = (m, s, x0, y0, offx, offy)
+        else:
+            midlat = math.radians((min(lats) + max(lats)) / 2.0)
+            cosm = math.cos(midlat)
+            xs = [lo * cosm for lo in lons]
+            gx0, gx1 = min(xs), max(xs)
+            gy0, gy1 = min(lats), max(lats)
+            s = min(avail_w / max(gx1 - gx0, 1e-9),
+                    avail_h / max(gy1 - gy0, 1e-9))
+            offx = pad + (avail_w - (gx1 - gx0) * s) / 2.0
+            offy = top + (avail_h - (gy1 - gy0) * s) / 2.0
+
+            def to_pt(lat, lon, _c=cosm, _s=s, _x0=gx0, _y1=gy1,
+                      _ox=offx, _oy=offy):
+                return _ox + (lon * _c - _x0) * _s, _oy + (_y1 - lat) * _s
+
+            bg = None
         pts = [to_pt(la, lo) for la, lo in zip(lats, lons)]
-        self._proj = (ts, pts, to_pt)
+        self._proj = (ts, pts, to_pt, bg)
         self._proj_key = key
         return self._proj
 
+    def _follow_to_pt(self, tele, pos, w, h, ky):
+        """Follow-mode transform builder -> (to_pt, bg_crop_or_None)."""
+        ix0, iy0, ix1, iy1 = self._inner(w, h, ky)
+        out_w, out_h = ix1 - ix0, iy1 - iy0
+        m = self.mosaic(tele)
+        win_w_m = self.follow_m
+        if m is not None:
+            cx, cy = m.px(*pos)
+            half_w = win_w_m / 2.0 / m.mpp
+            half_h = half_w * out_h / out_w
+            s = out_w / (2.0 * half_w)
+            bx0, by0 = cx - half_w, cy - half_h
+            crop = m.img.crop((int(bx0), int(by0),
+                               int(cx + half_w), int(cy + half_h)))
+
+            def to_pt(lat, lon, _m=m, _s=s, _bx=bx0, _by=by0):
+                mx, my = _m.px(lat, lon)
+                return ix0 + (mx - _bx) * _s, iy0 + (my - _by) * _s
+
+            return to_pt, crop, m.attribution
+        lat0, lon0 = pos
+        cosm = math.cos(math.radians(lat0))
+        ppm = out_w / win_w_m  # pixels per meter
+
+        def to_pt(lat, lon, _la=lat0, _lo=lon0, _c=cosm, _p=ppm):
+            dx = (lon - _lo) * 111320.0 * _c
+            dy = (_la - lat) * 111320.0
+            return ix0 + out_w / 2.0 + dx * _p, iy0 + out_h / 2.0 + dy * _p
+
+        return to_pt, None, None
+
+    # ---- drawing ----
     def _draw_face(self, dr, img, tele, w2, h2):
         k2 = h2 / self.DESIGN_H_
         self._panel(dr, w2, h2, k2)
+        if self.view_mode == "route":
+            ts, pts, to_pt, bg = self._project(tele, w2 // SS, h2 // SS,
+                                               k2 / SS)
+            if bg is not None:
+                m, s, x0, y0, offx, offy = bg
+                ix0, iy0, ix1, iy1 = self._inner(w2, h2, k2)
+                iw, ih = int(ix1 - ix0), int(iy1 - iy0)
+                # mosaic region that maps onto the inner rect (1x coords /SS)
+                sx0 = x0 + (ix0 / SS - offx) / s
+                sy0 = y0 + (iy0 / SS - offy) / s
+                sx1 = x0 + (ix1 / SS - offx) / s
+                sy1 = y0 + (iy1 / SS - offy) / s
+                crop = m.img.crop((int(sx0), int(sy0),
+                                   max(int(sx0) + 1, int(sx1)),
+                                   max(int(sy0) + 1, int(sy1))))
+                crop = crop.resize((iw, ih), Image.BILINEAR).convert("RGBA")
+                img.paste(crop, (int(ix0), int(iy0)),
+                          self._mask(iw, ih, k2))
+                dr.text((ix1 - 5 * k2, iy1 - 4 * k2), m.attribution,
+                        font=font("ui", 9 * k2), fill=MUTED, anchor="rs")
+            if len(pts) >= 2:
+                dr.line([(x * SS, y * SS) for x, y in pts], fill=TRACKLINE,
+                        width=max(2, int(2.6 * k2)), joint="curve")
         self._label_txt(dr, k2)
         nx, ny = w2 - 22 * k2, 20 * k2
         dr.polygon([(nx, ny - 8 * k2), (nx - 5 * k2, ny + 5 * k2),
                     (nx + 5 * k2, ny + 5 * k2)], fill=DIM)
         dr.text((nx, ny + 12 * k2), "N", font=font("uib", 10.5 * k2), fill=DIM,
                 anchor="mm")
-        _, pts, _ = self._project(tele, w2 // SS, h2 // SS, k2 / SS)
-        if len(pts) >= 2:
-            dr.line([(x * SS, y * SS) for x, y in pts], fill=TRACKLINE,
-                    width=max(2, int(2.6 * k2)), joint="curve")
 
     def _dot(self, ky):
         def build(dr, img, px2, k2):
@@ -587,24 +792,29 @@ class TrackMap(Gauge):
             dr.ellipse([c - r2, c - r2, c + r2, c + r2], fill=TEXT)
         return self._sprite("dot", ky, 24, build)
 
-    def _draw_dynamic(self, dr, img, tele, t, w, h, kx, ky):
+    def _draw_overlays(self, dr, img, tele, t, pos, to_pt, w, h, ky,
+                       clip=None):
+        """Route line was drawn by caller (or face); draw trail, maneuver
+        pointers and the position dot through to_pt."""
         from .telemetry import numbered_maneuvers
-        ts, pts, to_pt = self._project(tele, w, h, ky)
-        pos = tele.position(t)
+        ts, lats, lons = self._decimated(tele)
         i = bisect.bisect_right(ts, t)
         if i >= 1 and pos is not None:
-            trail = pts[:i] + [to_pt(*pos)]
+            trail = [to_pt(la, lo) for la, lo in
+                     zip(lats[:i], lons[:i])] + [to_pt(*pos)]
             if len(trail) > self.TRAIL_PTS:
                 stride = max(1, len(trail) // self.TRAIL_PTS)
                 trail = trail[::stride] + [trail[-1]]
             if len(trail) >= 2:
                 dr.line(trail, fill=ACCENT, width=max(2, int(3 * ky)))
-        # maneuver pointers
         for m, lbl in numbered_maneuvers(getattr(tele, "maneuvers", [])):
             mpos = tele.position(m["t"])
             if mpos is None:
                 continue
             x, y = to_pt(*mpos)
+            if clip and not (clip[0] <= x <= clip[2] and
+                             clip[1] <= y <= clip[3]):
+                continue
             col = ACCENT if m["kind"] == "T" else GREEN
             r = 3.5 * ky
             dr.ellipse([x - r, y - r, x + r, y + r], fill=col)
@@ -615,6 +825,47 @@ class TrackMap(Gauge):
             spr = self._dot(ky)
             d = spr.size[0]
             img.alpha_composite(spr, (int(x - d / 2), int(y - d / 2)))
+
+    def _draw_dynamic(self, dr, img, tele, t, w, h, kx, ky):
+        pos = tele.position(t)
+        if self.view_mode == "route":
+            _, _, to_pt, _ = self._project(tele, w, h, ky)
+            self._draw_overlays(dr, img, tele, t, pos, to_pt, w, h, ky)
+            return
+        # follow mode: draw background + route into a window layer, then
+        # paste it masked so nothing spills over the panel chrome
+        ix0, iy0, ix1, iy1 = self._inner(w, h, ky)
+        iw, ih = int(ix1 - ix0), int(iy1 - iy0)
+        if pos is None:
+            dr.text(((ix0 + ix1) / 2, (iy0 + iy1) / 2), "no fix",
+                    font=font("ui", 12 * ky), fill=DIM, anchor="mm")
+            return
+        to_pt_abs, crop, attribution = self._follow_to_pt(tele, pos, w, h, ky)
+
+        def to_pt(lat, lon):
+            x, y = to_pt_abs(lat, lon)
+            return x - ix0, y - iy0
+
+        if crop is not None:
+            layer = crop.resize((iw, ih), Image.BILINEAR).convert("RGBA")
+        else:
+            layer = Image.new("RGBA", (iw, ih), (22, 22, 22, 255))
+        ldr = ImageDraw.Draw(layer)
+        ts, lats, lons = self._decimated(tele)
+        pts = [to_pt(la, lo) for la, lo in zip(lats, lons)]
+        if len(pts) >= 2:
+            ldr.line(pts, fill=TRACKLINE, width=max(2, int(2.6 * ky)))
+        self._draw_overlays(ldr, layer, tele, t, pos, to_pt, w, h, ky,
+                            clip=(0, 0, iw, ih))
+        ldr = ImageDraw.Draw(layer)
+        if attribution:
+            ldr.text((iw - 5 * ky, ih - 4 * ky), attribution,
+                     font=font("ui", 9 * ky), fill=MUTED, anchor="rs")
+        scale_txt = (f"{self.follow_m / 1000:.1f} km"
+                     if self.follow_m >= 1000 else f"{self.follow_m:.0f} m")
+        ldr.text((5 * ky, ih - 4 * ky), scale_txt,
+                 font=font("ui", 9 * ky), fill=MUTED, anchor="ls")
+        img.paste(layer, (int(ix0), int(iy0)), self._mask(iw, ih, ky))
 
 
 class DigitsBox(Gauge):
@@ -650,14 +901,15 @@ class DigitsBox(Gauge):
 
 
 GAUGE_KINDS = {c.KIND: c for c in
-               (CompassCard, NeedleCompass, SpeedDial, HeelBar, TrackMap,
-                DigitsBox)}
+               (CompassCard, NeedleCompass, WindAngleDial, SpeedDial,
+                HeelBar, TrackMap, DigitsBox)}
 
-MAX_GAUGES = 10
+MAX_GAUGES = 12
 
 
 def default_gauges(tele=None):
-    """Standard sailing layout: instruments in left/right columns, center clear."""
+    """Standard sailing layout: instruments in left/right columns, center
+    clear. Wind gauges (TWD/TWS/AWA/AWS) light up when their stream exists."""
     gs = [
         CompassCard("heading", "HDG", x=0.022, y=0.035),
         SpeedDial("sog", "SOG", x=0.022, y=0.290),
@@ -665,6 +917,9 @@ def default_gauges(tele=None):
         NeedleCompass("twd", "TWD", x=0.858, y=0.035),
         NeedleCompass("cog", "COG", x=0.858, y=0.290),
         TrackMap(x=0.843, y=0.545),
+        WindAngleDial("awa", "AWA", x=0.726, y=0.035),
+        DigitsBox("tws", "TWS", x=0.735, y=0.290),
+        DigitsBox("aws", "AWS", x=0.735, y=0.385),
     ]
     if tele is not None:
         for g in gs:

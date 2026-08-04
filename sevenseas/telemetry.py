@@ -16,19 +16,23 @@ EARTH_R = 6371000.0
 SAMPLE_GRACE = 3.0  # seconds of tolerance beyond data range before returning None
 
 # streams the app knows by name; everything else becomes an "extra" linear stream
-ANGULAR_STREAMS = {"heading", "cog", "twd"}
+ANGULAR_STREAMS = {"heading", "cog", "twd", "awd", "awa"}
 STREAM_UNITS = {
     "sog": "kn", "tws": "kn", "heading": "°", "cog": "°",
     "twd": "°", "roll": "°", "pitch": "°", "ele": "m",
     "stw": "kn", "depth": "m", "watertemp": "°C",
+    "awa": "°", "awd": "°", "aws": "kn",
 }
 STREAM_LABELS = {
     "sog": "SOG", "heading": "HDG", "cog": "COG", "twd": "TWD",
     "tws": "TWS", "roll": "HEEL", "pitch": "PITCH", "ele": "ELEV",
     "stw": "STW", "depth": "DEPTH", "watertemp": "WATER",
+    "awa": "AWA", "awd": "AWD", "aws": "AWS",
 }
 
-# priority order matters for the fuzzy (contains) matching pass
+# priority order matters for the fuzzy (contains) matching pass;
+# apparent-wind streams come before true-wind so "apparent_wind_*"
+# columns are claimed correctly
 SYNONYMS = [
     ("time", ("time", "timestamp", "datetime", "datetime_utc", "date_time",
               "utc", "date", "gpstime", "gps_time")),
@@ -41,10 +45,14 @@ SYNONYMS = [
              "bearing")),
     ("roll", ("roll", "heel", "tilt", "bank", "heeldeg", "rolldeg")),
     ("pitch", ("pitch", "trim", "pitchdeg")),
-    ("tws", ("tws", "windspeed", "wspd", "aws", "windspd")),
-    ("twd", ("twd", "winddirection", "winddir", "wdir", "awd", "wind")),
+    ("awa", ("awa", "apparentwindangle", "windangle")),
+    ("aws", ("aws", "apparentwindspeed", "appwindspeed")),
+    ("awd", ("awd", "apparentwinddirection", "apparentwinddir")),
+    ("tws", ("tws", "truewindspeed", "windspeed", "wspd", "windspd")),
+    ("twd", ("twd", "truewinddirection", "winddirection", "winddir",
+             "wdir", "wind")),
 ]
-SPEED_STREAMS = {"sog", "tws"}
+SPEED_STREAMS = {"sog", "tws", "aws"}
 SPEED_UNIT_FACTORS = {"kn": 1.0, "m/s": KTS_PER_MS, "km/h": 0.5399568, "mph": 0.8689762}
 
 
@@ -565,10 +573,22 @@ class Telemetry:
 
         if len(data["wind"]) >= 2:
             wt = [w[0] for w in data["wind"]]
-            tele._add("twd", wt, [w[1] for w in data["wind"]], label="AWD")
-            tele._add("tws", wt, [w[2] for w in data["wind"]], label="AWS")
-            tele.mapping["twd"] = "vkx:wind (apparent)"
-            tele.mapping["tws"] = "vkx:wind (apparent)"
+            awd_vals = [w[1] for w in data["wind"]]
+            tele._add("awd", wt, awd_vals)
+            tele._add("aws", wt, [w[2] for w in data["wind"]])
+            tele.mapping["awd"] = "vkx:wind (apparent)"
+            tele.mapping["aws"] = "vkx:wind (apparent)"
+            if tele.has("heading"):
+                h = tele.streams["heading"]
+                at, av = [], []
+                for t, awd in zip(wt, awd_vals):
+                    hv = h.sample(t)
+                    if hv is not None:
+                        at.append(t)
+                        av.append((awd - hv) % 360.0)
+                if len(at) >= 2:
+                    tele._add("awa", at, av)
+                    tele.mapping["awa"] = "(derived: AWD − HDG)"
         for key, name in (("stw", "stw"), ("depth", "depth"),
                           ("temp", "watertemp")):
             if len(data[key]) >= 2:

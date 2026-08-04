@@ -88,6 +88,14 @@ def cmd_export(args, log):
             g.enabled = g.enabled and g.available(tele)
     else:
         glist = gauges.default_gauges(tele)
+    for g in glist:
+        if (g.KIND == "track_map" and g.enabled
+                and g.map_style != "none" and tele.track):
+            from . import maptiles
+            log(f"fetching {g.map_style} map tiles…")
+            if maptiles.service.prepare(tele.track, g.map_style,
+                                        g.map_pad()) is None:
+                log("  tile fetch failed — rendering without map background")
     if doc and args.offset is None:
         offset = tele.t_start + float(doc.get("user_offset", 0.0))
     else:
