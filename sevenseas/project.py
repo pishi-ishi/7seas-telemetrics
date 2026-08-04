@@ -7,7 +7,7 @@ from . import gauges
 
 def save_project(path, video_path, data_path, mapping, speed_units,
                  user_offset, overlay_fps, gauge_list,
-                 trim=None, maneuvers=None, quality="medium"):
+                 trim=None, maneuvers=None, quality="medium", audio=True):
     doc = {
         "app": "7seas-telemetrics",
         "version": 3,
@@ -18,6 +18,7 @@ def save_project(path, video_path, data_path, mapping, speed_units,
         "user_offset": float(user_offset),
         "overlay_fps": int(overlay_fps),
         "quality": quality,
+        "audio": bool(audio),
         "trim": list(trim) if trim else [None, None],
         "maneuvers": maneuvers or [],
         "gauges": [g.to_dict() for g in gauge_list],

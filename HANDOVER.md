@@ -18,10 +18,10 @@ gauges onto video and exports H.264 mp4. Owner: ruzbeh (GitHub:
 | `vkx.py` | Vakaros Atlas binary parser per the official spec (github.com/vakaros/vkx). Row 0x02 gives GNSS + NED quaternion → heading/pitch/roll. 0x0A wind is **apparent** → `awd`/`aws`; `awa` derived = AWD − HDG. Race-timer events (0x04) are parsed into `tele.race_events` but **unused so far** (auto-trim idea below). Unknown row keys resync by scanning for the next 0xFF page header. |
 | `gauges.py` | All gauge rendering. 1080p design space, scaled by frame height. Perf pattern: static faces drawn at 2x → cached at 1x; rotating parts (compass card, needles, dot) are prebuilt 1x sprites rotated per frame (rotation resampling = antialiasing); text is FreeType-AA at 1x. **Never draw large per-frame supersampled surfaces** — that was 70 ms/frame before this pattern (now ~16–23 ms). `HeelBar`/`DigitsBox`/`TrackMap` support per-axis stretch (`sx`/`sy`); circular gauges uniform only. `TrackMap` has `map_style` (none/street/satellite), `view_mode` (route/follow), `follow_m`. |
 | `maptiles.py` | Slippy-tile mosaics: OSM street / Esri World Imagery, disk cache in `%LOCALAPPDATA%\7seas-telemetrics\tiles`, ≤140 tiles, zoom auto ≤17, darkened for overlay contrast. `service.prepare(track, style, pad)` blocking, or async with callback. Respect OSM tile policy (User-Agent set, light use only — do NOT bulk download). |
-| `videoio.py` | ffmpeg probe (banner parse, incl. source bitrate), frame extraction, realtime play stream (`-re`, 12 fps, rgb24 pipe), export: RGBA overlay frames piped into ffmpeg `overlay` filter; encoder auto-pick h264_qsv → h264_mf → libx264. `QUALITY_PRESETS` (high/medium/low) set output height, fps, overlay fps, CRF/ICQ and audio; `bitrate_cap()` = min(bpp budget, source bitrate × 1.6 × √shrink). **h264_qsv needs `-b:v` alongside `-global_quality`** or it ignores `-maxrate` and overshoots ~35%. Overlay is composed at the *output* size, so low quality also renders ~3x faster. |
+| `videoio.py` | ffmpeg probe (banner parse, incl. source bitrate), frame extraction, realtime play stream (`-re`, 12 fps, rgb24 pipe), export: RGBA overlay frames piped into ffmpeg `overlay` filter; encoder auto-pick h264_qsv → h264_mf → libx264. `QUALITY_PRESETS` (high/medium/low) set output height, fps, overlay fps, CRF/ICQ and audio; `bitrate_cap()` = min(bpp budget, source bitrate × 1.6 × √shrink). `audio=False` → `-an`. **h264_qsv needs `-b:v` alongside `-global_quality`** or it ignores `-maxrate` and overshoots ~35%. Overlay is composed at the *output* size, so low quality also renders ~3x faster. |
 | `gui.py` | tkinter single-window editor. Threads do all ffmpeg/parse/tile work; results come back via `self.q` polled every 80 ms — **never touch tk from worker threads**. `tele_full` vs `tele` (trimmed view); `offset = tele.t_start + user_off`. Known tk gotcha handled in `_on_scrub`: `Scale.set()` fires its command **at idle**, so programmatic-echo values are ignored by comparing to `cur_t`. |
-| `cli.py` | `--selftest` (synthetic end-to-end, logs to `%TEMP%\7seas_log.txt`), `--export` headless, GUI default. Both take `--quality`. |
-| `project.py` | `.7seas.json` (v3) save/load (paths, mapping, offset, trim, maneuvers, quality preset, gauge layout incl. stretch + map settings). |
+| `cli.py` | `--selftest` (synthetic end-to-end, logs to `%TEMP%\7seas_log.txt`), `--export` headless, GUI default. Both take `--quality` and `--no-audio`. |
+| `project.py` | `.7seas.json` (v3) save/load (paths, mapping, offset, trim, maneuvers, quality preset, audio flag, gauge layout incl. stretch + map settings). |
 
 ## Build & test
 
@@ -42,6 +42,12 @@ Preset sizing verified against a 1080p30 source at ~1.1 Mbps (the shape of a
 300 MB / 38 min phone clip): HIGH ≈ 395 MB, MEDIUM ≈ 242 MB, LOW ≈ 85 MB for
 38 minutes — v0.3.0 produced 1.8 GB for the same input. Note the synthetic
 `testsrc2` clip is compression-hostile, so real footage lands lower.
+
+**"Include audio" saves size, not time.** Measured alternating 60 s medium
+exports: with 21.9 s / 27.4 s, without 23.6 s / 20.5 s — run-to-run variance
+on this laptop (16.6–37.0 s for identical work) swamps any audio effect.
+Don't re-litigate this as a perf win; the saving is the audio bitrate times
+the duration (≈18–36 MB over 38 min), and that part is real.
 
 ## Conventions & invariants
 

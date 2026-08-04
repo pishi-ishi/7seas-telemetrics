@@ -104,11 +104,13 @@ def cmd_export(args, log):
     enc = videoio.pick_encoder()
     quality = args.quality or (doc and doc.get("quality")) or videoio.QUALITY_DEFAULT
     q = videoio.get_quality(quality)
+    audio = False if args.no_audio else (doc.get("audio", True) if doc else True)
     ofps = args.overlay_fps or q.overlay_fps
     dims = videoio.target_dims(info, q)
     log(f"encoder: {enc}; quality: {q.key} ({dims[0]}x{dims[1]} @ "
         f"{videoio.target_fps(info, q):.4g} fps, "
-        f"est. {videoio.estimate_size_mb(info, q):,.0f} MB); output: {out}")
+        f"{'with' if audio else 'no'} audio, "
+        f"est. {videoio.estimate_size_mb(info, q, audio):,.0f} MB); output: {out}")
     t0 = time.time()
     last = [0.0]
 
@@ -121,8 +123,8 @@ def cmd_export(args, log):
             log(f"  {pct:5.1f}%  ({speed:.2f}x realtime)")
 
     elapsed = videoio.export(info, tele, glist, offset, out, quality=q,
-                             overlay_fps=args.overlay_fps, encoder=enc,
-                             progress=prog)
+                             audio=audio, overlay_fps=args.overlay_fps,
+                             encoder=enc, progress=prog)
     log(f"done in {elapsed:.1f}s ({info.duration / elapsed:.2f}x realtime): "
         f"{out} ({os.path.getsize(out) / (1024 * 1024):,.1f} MB)")
     return 0
@@ -162,8 +164,10 @@ def cmd_selftest(args, log):
     glist = gauges.default_gauges(tele)
     enc = videoio.pick_encoder()
     q = videoio.get_quality(args.quality)
-    log(f"4/5 exporting with encoder {enc}, quality {q.key} ...")
+    log(f"4/5 exporting with encoder {enc}, quality {q.key}, "
+        f"{'no audio' if args.no_audio else 'with audio'} ...")
     elapsed = videoio.export(info, tele, glist, tele.t_start, out, quality=q,
+                             audio=not args.no_audio,
                              overlay_fps=args.overlay_fps, encoder=enc)
     speed = info.duration / elapsed
     log(f"   export took {elapsed:.1f}s = {speed:.2f}x realtime"
@@ -172,7 +176,7 @@ def cmd_selftest(args, log):
     out_mb = os.path.getsize(out) / (1024 * 1024)
     log(f"   size: in {in_mb:.1f} MB -> out {out_mb:.1f} MB "
         f"({out_mb / in_mb:.2f}x, est. was "
-        f"{videoio.estimate_size_mb(info, q):.1f} MB)")
+        f"{videoio.estimate_size_mb(info, q, not args.no_audio):.1f} MB)")
 
     out_info = videoio.probe(out)
     ok_dur = abs(out_info.duration - info.duration) < 2.5
@@ -209,6 +213,8 @@ def main(argv=None):
                          "at video t=0")
     ap.add_argument("--quality", choices=("high", "medium", "low"),
                     default=None, help="output size preset (default: medium)")
+    ap.add_argument("--no-audio", action="store_true",
+                    help="drop the audio track from the render")
     ap.add_argument("--overlay-fps", type=int, default=None,
                     help="override the preset's gauge frame rate")
     ap.add_argument("--keep", action="store_true", help="keep selftest workdir")

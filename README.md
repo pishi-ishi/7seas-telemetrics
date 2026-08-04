@@ -63,6 +63,11 @@ No install needed. First launch takes a few seconds (self-extracting bundle).
    The encoder also holds its bitrate near the source's own — re-encoding a
    lean clip at a much higher bitrate only preserves its artifacts in
    greater fidelity.
+
+   **Include audio** (on by default) — unticking it drops the audio track,
+   saving its bitrate for the whole render: ≈36 MB on HIGH, ≈27 MB on
+   MEDIUM, ≈18 MB on LOW for a 38-minute clip. It does *not* render
+   measurably faster; the time goes into the video, not the sound.
 9. **RENDER VIDEO** — H.264 .mp4 next to your source video by default.
    Intel QuickSync hardware encoding is used automatically when available.
 
@@ -72,8 +77,8 @@ wind angle dial (AWA, port/starboard sectors), TWS & AWS readouts, track
 map with maneuver pointers and map background, digits box (any stream).
 
 **Save project…** stores file paths, column mapping, sync offset, trim,
-maneuvers, gauge layout and the quality preset in a `.7seas.json` you can
-reload later.
+maneuvers, gauge layout, the quality preset and the audio choice in a
+`.7seas.json` you can reload later.
 
 ## Command line
 
@@ -81,7 +86,8 @@ reload later.
 7seas-telemetrics.exe --selftest            # end-to-end synthetic test
 7seas-telemetrics.exe --export --video V.mp4 --data log.vkx
                       [--offset start|meta|SECONDS] [--out OUT.mp4]
-                      [--quality high|medium|low] [--project saved.7seas.json]
+                      [--quality high|medium|low] [--no-audio]
+                      [--project saved.7seas.json]
 ```
 
 The app is windowed, so CLI runs log to `%TEMP%\7seas_log.txt`.

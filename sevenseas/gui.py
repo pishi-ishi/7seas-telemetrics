@@ -244,6 +244,13 @@ class App:
                      lambda k=key: self.set_quality(k))
             b.pack(side="left", fill="x", expand=True, padx=(0, 4))
             self.btn_quality[key] = b
+        self.var_audio = tk.BooleanVar(value=True)
+        self.chk_audio = tk.Checkbutton(
+            f, text="Include audio", variable=self.var_audio,
+            command=self._on_audio_toggle, bg=PANEL, fg=TEXT,
+            activebackground=PANEL, activeforeground=TEXT, selectcolor=PANEL2,
+            font=F_UI, anchor="w", cursor="hand2", disabledforeground=DIM)
+        self.chk_audio.pack(fill="x", pady=(4, 0))
         self.lbl_quality = tk.Label(f, text="", font=F_MONO, bg=PANEL, fg=DIM,
                                     anchor="w")
         self.lbl_quality.pack(fill="x", pady=(3, 0))
@@ -437,6 +444,8 @@ class App:
             self.gauges = pend.get("gauge_objects") or gauges.default_gauges(tele)
             self.user_off = float(pend.get("user_offset", 0.0))
             self.set_quality(pend.get("quality") or self.quality)
+            self.var_audio.set(bool(pend.get("audio", True)))
+            self._update_quality_ui()
             self._apply_view()
         else:
             if not remap:
@@ -1149,6 +1158,9 @@ class App:
         self.overlay_fps = videoio.get_quality(key).overlay_fps
         self._update_quality_ui()
 
+    def _on_audio_toggle(self):
+        self._update_quality_ui()
+
     def _update_quality_ui(self):
         for key, b in self.btn_quality.items():
             on = key == self.quality
@@ -1157,7 +1169,7 @@ class App:
         q = videoio.get_quality(self.quality)
         if self.vinfo:
             w, h = videoio.target_dims(self.vinfo, q)
-            mb = videoio.estimate_size_mb(self.vinfo, q)
+            mb = videoio.estimate_size_mb(self.vinfo, q, self.var_audio.get())
             size = f"{mb:,.1f}" if mb < 100 else f"{mb:,.0f}"
             self.lbl_quality.configure(
                 text=f"{w}x{h} · {videoio.target_fps(self.vinfo, q):.4g} fps · "
@@ -1171,6 +1183,7 @@ class App:
         self.btn_cancel.configure(state="normal" if running else "disabled")
         for b in self.btn_quality.values():
             b.configure(state="disabled" if running else "normal")
+        self.chk_audio.configure(state="disabled" if running else "normal")
 
     def start_export(self):
         if self.exporting:
@@ -1203,6 +1216,7 @@ class App:
         tele.maneuvers = self.maneuvers
         glist = list(self.gauges)
         offset, qual, enc = self.offset, self.quality, self.encoder
+        want_audio = self.var_audio.get()
         start = [0.0]
 
         def prog(done, total):
@@ -1224,8 +1238,9 @@ class App:
                         maptiles.service.prepare(tele.track, g.map_style,
                                                  g.map_pad())
                 elapsed = videoio.export(info, tele, glist, offset, out,
-                                         quality=qual, encoder=enc,
-                                         progress=prog, cancel=self.cancel_evt)
+                                         quality=qual, audio=want_audio,
+                                         encoder=enc, progress=prog,
+                                         cancel=self.cancel_evt)
                 self.q.put(("export_done", out, elapsed))
             except videoio.ExportCancelled:
                 try:
@@ -1287,7 +1302,8 @@ class App:
             full.mapping if (full and full.kind == "csv") else None,
             full.speed_units if full else {},
             self.user_off, self.overlay_fps, self.gauges,
-            trim=self.trim, maneuvers=self.maneuvers, quality=self.quality)
+            trim=self.trim, maneuvers=self.maneuvers, quality=self.quality,
+            audio=self.var_audio.get())
         self.status(f"project saved: {os.path.basename(p)}", OK)
 
     def load_project(self):

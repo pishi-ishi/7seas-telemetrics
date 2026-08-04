@@ -219,13 +219,12 @@ def bitrate_cap(q, info):
     return max(200, int(cap))
 
 
-def estimate_size_mb(info, quality):
+def estimate_size_mb(info, quality, audio=True):
     """Rough expected output size in MB (quality-based encodes usually land
     a little under the cap)."""
     q = get_quality(quality)
-    audio = q.abr or 160
-    return ((bitrate_cap(q, info) * 0.8 + audio)
-            * info.duration / 8.0 / 1024.0)
+    kbps = bitrate_cap(q, info) * 0.8 + ((q.abr or 160) if audio else 0)
+    return kbps * info.duration / 8.0 / 1024.0
 
 
 # ---------------- encoder selection ----------------
@@ -280,13 +279,14 @@ def _stderr_drain(pipe, sink):
 
 
 def export(info, tele, gauge_list, offset, out_path, quality=QUALITY_DEFAULT,
-           overlay_fps=None, encoder=None,
+           audio=True, overlay_fps=None, encoder=None,
            progress=None, cancel=None, _audio_mode="copy"):
     """Composite gauges over info.path and write out_path (.mp4).
 
     offset: data epoch seconds corresponding to video t=0
             (data_time = offset + video_time).
     quality: key into QUALITY_PRESETS (or a Quality) — drives output size.
+    audio: False drops the audio track entirely.
     overlay_fps: overrides the preset's overlay frame rate.
     progress: callable(done_frames, total_frames) or None.
     cancel: threading.Event or None.
@@ -299,10 +299,12 @@ def export(info, tele, gauge_list, offset, out_path, quality=QUALITY_DEFAULT,
     cap = bitrate_cap(q, info)
     encoder = encoder or pick_encoder()
     total = max(1, int(math.ceil(info.duration * overlay_fps)))
-    if q.abr is None and _audio_mode == "copy":
-        audio = ["-map", "0:a?", "-c:a", "copy"]
+    if not audio:
+        audio_args = ["-an"]
+    elif q.abr is None and _audio_mode == "copy":
+        audio_args = ["-map", "0:a?", "-c:a", "copy"]
     else:
-        audio = ["-map", "0:a?", "-c:a", "aac", "-b:a", f"{q.abr or 160}k"]
+        audio_args = ["-map", "0:a?", "-c:a", "aac", "-b:a", f"{q.abr or 160}k"]
     chain = []
     if (w, h) != (info.width, info.height):
         chain.append(f"scale={w}:{h}")
@@ -315,7 +317,7 @@ def export(info, tele, gauge_list, offset, out_path, quality=QUALITY_DEFAULT,
         "-i", "pipe:0",
         "-filter_complex",
         f"[0:v]{','.join(chain)}[base];[base][1:v]overlay=0:0[v]",
-        "-map", "[v]", *audio,
+        "-map", "[v]", *audio_args,
         *_encoder_args(encoder, q, cap, out_fps),
         "-pix_fmt", "yuv420p", "-movflags", "+faststart",
         out_path,
@@ -355,10 +357,10 @@ def export(info, tele, gauge_list, offset, out_path, quality=QUALITY_DEFAULT,
         err = "\n".join(list(errors)[-12:])
         # muxer/codec rejections (e.g. PCM audio into mp4) fail almost
         # immediately - retry once transcoding the audio instead of copying
-        if (q.abr is None and _audio_mode == "copy"
+        if (audio and q.abr is None and _audio_mode == "copy"
                 and written < overlay_fps * 20):
             return export(info, tele, gauge_list, offset, out_path, quality=q,
-                          overlay_fps=overlay_fps, encoder=encoder,
+                          audio=True, overlay_fps=overlay_fps, encoder=encoder,
                           progress=progress, cancel=cancel, _audio_mode="aac")
         raise RuntimeError(f"ffmpeg export failed (rc={rc}):\n{err}")
     if not os.path.exists(out_path) or os.path.getsize(out_path) < 1024:
