@@ -78,10 +78,9 @@ QSV): 1.2–2.2× realtime for 1080p30 export depending on thermals.
 
 ## Repo / publishing state
 
-Git repo initialized at project root (branch `main`), MIT license, credits
-to walkersutton/cyclemetry and Claude Code in README. Destination:
-**public repo under github.com/phishi-ishi**. GitHub CLI is installed at
-`C:\Program Files\GitHub CLI\gh.exe`; if auth isn't completed yet:
-`gh auth login --hostname github.com --git-protocol https --web` (device
-flow), then
-`gh repo create 7seas-telemetrics --public --source . --push`.
+Published: **https://github.com/pishi-ishi/7seas-telemetrics** (public,
+branch `main`), MIT license, credits to walkersutton/cyclemetry and Claude
+Code in README. GitHub CLI is installed at
+`C:\Program Files\GitHub CLI\gh.exe` and authenticated as `pishi-ishi`
+(keyring). `dist/` is gitignored — ship the exe via GitHub Releases:
+`gh release create v0.3.0 dist\7seas-telemetrics.exe --title "v0.3.0"`.
