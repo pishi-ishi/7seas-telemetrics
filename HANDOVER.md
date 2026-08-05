@@ -100,5 +100,16 @@ Published: **https://github.com/pishi-ishi/7seas-telemetrics** (public,
 branch `main`), MIT license, credits to walkersutton/cyclemetry and Claude
 Code in README. GitHub CLI is installed at
 `C:\Program Files\GitHub CLI\gh.exe` and authenticated as `pishi-ishi`
-(keyring). `dist/` is gitignored — ship the exe via GitHub Releases:
-`gh release create v0.4.0 dist\7seas-telemetrics.exe --title "v0.4.0"`.
+(keyring). `dist/` is gitignored — the exe ships as a GitHub Release asset,
+never in the tree. Published: tag `v0.4.0` → release *"v0.4.0 — render size
+controls"* with `7seas-telemetrics.exe` attached (49,879,991 bytes, SHA-256
+`7d9f1206…cd473`, identical to the local `dist\` build). Next release:
+
+```powershell
+.\build.ps1
+gh release create v0.5.0 dist\7seas-telemetrics.exe --title "v0.5.0 — ..." --notes "..."
+```
+
+The README's download link uses `/releases/latest/download/…`, so it follows
+the newest release automatically — but the SHA-256 quoted there is per-version
+and must be updated by hand (`Get-FileHash dist\7seas-telemetrics.exe`).

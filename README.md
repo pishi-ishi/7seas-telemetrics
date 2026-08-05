@@ -5,10 +5,21 @@ apparent wind, COG, track with map background, tack/gybe pointers) onto
 video footage. Everything runs locally — no server, no account. Output is
 a standard `.mp4`.
 
-## Run
+## Download
 
-Double-click **`dist\7seas-telemetrics.exe`** (Windows 10/11, 64-bit).
-No install needed. First launch takes a few seconds (self-extracting bundle).
+**[7seas-telemetrics.exe — latest release](https://github.com/pishi-ishi/7seas-telemetrics/releases/latest/download/7seas-telemetrics.exe)**
+(Windows 10/11 64-bit, ~50 MB). No install needed: double-click it. First
+launch takes a few seconds (self-extracting bundle). The exe is unsigned, so
+SmartScreen may warn — *More info → Run anyway*.
+
+v0.4.0 SHA-256:
+`7d9f1206a2ce5c2d6b0f61fb1d18a7bfb9adb080c2d28435620d8fa3e42cd473`
+(check with `Get-FileHash .\7seas-telemetrics.exe`).
+
+The exe is **not** in this repository — `dist/` is gitignored, since a 50 MB
+binary per build would bloat every clone. It ships as a
+[release](https://github.com/pishi-ishi/7seas-telemetrics/releases) asset, or
+you can build it from source yourself — see [Developing](#developing).
 
 ## Workflow
 
@@ -107,6 +118,8 @@ Software x264 fallback is roughly 1.5x slower. RAM use is modest (< 1 GB);
 overlay frames are piped, never written to disk.
 
 ## Developing
+
+Windows, Python 3.12 64-bit (3.12.8 is what the releases are built with):
 
 ```powershell
 python -m venv .venv
