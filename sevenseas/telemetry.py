@@ -652,6 +652,37 @@ def detect_maneuvers(tele, t_range=(65.0, 120.0), g_range=(15.0, 60.0),
     return events
 
 
+def _mean_heading(s, t, half=2.0, step=1.0):
+    """Circular mean of a heading stream over [t-half, t+half]; averaging
+    rides out the yaw wobble a single sample would pick up."""
+    xs = ys = 0.0
+    tt = t - half
+    while tt <= t + half + 1e-9:
+        v = s.sample(tt)
+        if v is not None:
+            a = math.radians(v)
+            xs += math.cos(a)
+            ys += math.sin(a)
+        tt += step
+    if abs(xs) < 1e-9 and abs(ys) < 1e-9:
+        return None
+    return math.degrees(math.atan2(ys, xs)) % 360.0
+
+
+def course_change(tele, t, window=12.0):
+    """Signed course change (±180°) across ±window seconds at t — the same
+    quantity detect_maneuvers thresholds, for one hand-picked instant.
+    None when there is no heading/COG data around t."""
+    s = tele.streams.get("heading") or tele.streams.get("cog")
+    if not s or len(s.times) < 3:
+        return None
+    a = _mean_heading(s, t - window)
+    b = _mean_heading(s, t + window)
+    if a is None or b is None:
+        return None
+    return ((b - a + 180.0) % 360.0) - 180.0
+
+
 def numbered_maneuvers(maneuvers):
     """[(maneuver, "T1"/"G2"/...)] for enabled maneuvers in time order."""
     out = []

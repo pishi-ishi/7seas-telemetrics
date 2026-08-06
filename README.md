@@ -12,8 +12,8 @@ a standard `.mp4`.
 launch takes a few seconds (self-extracting bundle). The exe is unsigned, so
 SmartScreen may warn — *More info → Run anyway*.
 
-v0.4.0 SHA-256:
-`7d9f1206a2ce5c2d6b0f61fb1d18a7bfb9adb080c2d28435620d8fa3e42cd473`
+v0.5.0 SHA-256:
+`319b3cb41a1f93b787afcfa68b490e060f4f8092dee023bf286b4db0b0501707`
 (check with `Get-FileHash .\7seas-telemetrics.exe`).
 
 The exe is **not** in this repository — `dist/` is gitignored, since a 50 MB

@@ -877,8 +877,10 @@ class App:
         if not self.tele:
             messagebox.showinfo(APP_NAME, "Load telemetry data first.")
             return
-        self.maneuvers.append({"t": self.offset + self.frame_t, "kind": kind,
-                               "mag": 0.0, "enabled": True})
+        t = self.offset + self.frame_t
+        chg = telemetry.course_change(self.tele, t)
+        self.maneuvers.append({"t": t, "kind": kind, "enabled": True,
+                               "mag": 0.0 if chg is None else round(abs(chg), 1)})
         self._maneuvers_changed()
 
     def _map_ready(self):
@@ -980,9 +982,7 @@ class App:
             rebuild_rows()
 
         def add(kind):
-            self.maneuvers.append({"t": self.offset + self.frame_t,
-                                   "kind": kind, "mag": 0.0, "enabled": True})
-            self._maneuvers_changed()
+            self.man_add(kind)
             rebuild_rows()
 
         def clear():

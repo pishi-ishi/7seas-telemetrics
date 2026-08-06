@@ -63,8 +63,11 @@ the duration (≈18–36 MB over 38 min), and that part is real.
   empty — v0.4.0 auto-detected on load and a day-long log produced 127
   markers the owner then deleted one by one. Detection only runs when the
   user presses Auto-detect, which replaces the list and therefore confirms
-  first when it is not empty. Hand-added entries carry `mag = 0.0`
-  (unmeasured), which is why a hand-built list shows `0.0°` in the editor.
+  first when it is not empty. Hand-added entries measure their own angle via
+  `telemetry.course_change()` (circular-mean heading ±2 s at t∓12 s, then
+  shortest-arc difference) — it reproduces `detect_maneuvers`' magnitude to
+  0.1° on real VKX data. It returns `None`, stored as `mag = 0.0`, within
+  12 s of either end of the log, where the window has no data to compare.
 
 ## Known issues / risks
 
@@ -107,9 +110,11 @@ branch `main`), MIT license, credits to walkersutton/cyclemetry and Claude
 Code in README. GitHub CLI is installed at
 `C:\Program Files\GitHub CLI\gh.exe` and authenticated as `pishi-ishi`
 (keyring). `dist/` is gitignored — the exe ships as a GitHub Release asset,
-never in the tree. Published: tag `v0.4.0` → release *"v0.4.0 — render size
-controls"* with `7seas-telemetrics.exe` attached (49,879,991 bytes, SHA-256
-`7d9f1206…cd473`, identical to the local `dist\` build). Next release:
+never in the tree. Latest: tag `v0.5.0` → release *"v0.5.0 — opt-in
+maneuvers, scrollable panels, gauges without plates"* with
+`7seas-telemetrics.exe` attached (49,884,408 bytes, SHA-256
+`319b3cb4…501707`, identical to the local `dist\` build; bundle verified with
+`dist\7seas-telemetrics.exe --selftest`, 3.5× realtime). Next release:
 
 ```powershell
 .\build.ps1
