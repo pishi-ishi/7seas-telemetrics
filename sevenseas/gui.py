@@ -61,6 +61,41 @@ def _btn(parent, text, cmd, accent=False, **kw):
     return b
 
 
+def _scroll_area(parent, **kw):
+    """Vertically scrollable region. Returns (canvas, inner frame): pack the
+    content into the inner frame, scroll the canvas."""
+    canvas = tk.Canvas(parent, bg=PANEL, highlightthickness=0, bd=0, **kw)
+    sb = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview,
+                       style="Dark.Vertical.TScrollbar")
+    canvas.configure(yscrollcommand=sb.set)
+    # scrollbar first: the canvas's requested width can exceed a fixed-width
+    # parent, and then the packer has nothing left to give the scrollbar
+    sb.pack(side="right", fill="y")
+    canvas.pack(side="left", fill="both", expand=True)
+    inner = tk.Frame(canvas, bg=PANEL)
+    win = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+    def fit(_e=None):
+        canvas.configure(scrollregion=canvas.bbox("all"))
+        canvas.itemconfigure(win, width=canvas.winfo_width())
+    inner.bind("<Configure>", fit)
+    canvas.bind("<Configure>", fit)
+    return canvas, inner
+
+
+def _bind_wheel(widget, canvas):
+    """Scroll `canvas` when the wheel turns over `widget` or its children.
+    Bound per widget (not bind_all) so the preview keeps its own wheel-zoom."""
+    def on_wheel(e):
+        canvas.yview_scroll(-1 if e.delta > 0 else 1, "units")
+        return "break"
+    stack = [widget]
+    while stack:
+        w = stack.pop()
+        w.bind("<MouseWheel>", on_wheel)
+        stack.extend(w.winfo_children())
+
+
 class App:
     def __init__(self, root):
         self.root = root
@@ -136,33 +171,41 @@ class App:
         style.configure("Accent.Horizontal.TProgressbar", troughcolor=PANEL3,
                         background=ACCENT, bordercolor=PANEL, lightcolor=ACCENT,
                         darkcolor=ACCENT)
+        style.configure("Dark.Vertical.TScrollbar", troughcolor=PANEL2,
+                        background=DIM, bordercolor=PANEL, arrowcolor=MUTED,
+                        lightcolor=DIM, darkcolor=DIM)
+        style.map("Dark.Vertical.TScrollbar",
+                  background=[("active", MUTED)])
 
         outer = tk.Frame(self.root, bg=BG)
         outer.pack(fill="both", expand=True, padx=8, pady=8)
 
-        self.left = tk.Frame(outer, bg=PANEL, width=304)
+        # left panel scrolls: on short screens the export controls would
+        # otherwise sit below the window edge with no way to reach them
+        self.left = tk.Frame(outer, bg=PANEL, width=320)
         self.left.pack(side="left", fill="y")
         self.left.pack_propagate(False)
+        self.lscroll, pane = _scroll_area(self.left)
 
         center = tk.Frame(outer, bg=BG)
         center.pack(side="left", fill="both", expand=True, padx=(8, 0))
 
         # ---- left panel ----
-        head = tk.Frame(self.left, bg=PANEL)
+        head = tk.Frame(pane, bg=PANEL)
         head.pack(fill="x", padx=12, pady=(12, 0))
         tk.Label(head, text="7SEAS", font=("Segoe UI Semibold", 12), bg=PANEL,
                  fg=TEXT).pack(side="left")
         tk.Label(head, text="TELEMETRICS", font=("Segoe UI", 12), bg=PANEL,
                  fg=ACCENT).pack(side="left", padx=(4, 0))
 
-        f = self._section(self.left, "Video")
+        f = self._section(pane, "Video")
         _btn(f, "Open video…", self.open_video).pack(fill="x")
         self.lbl_video = tk.Label(f, text="no video loaded", font=F_MONO,
                                   bg=PANEL, fg=DIM, anchor="w", justify="left",
                                   wraplength=270)
         self.lbl_video.pack(fill="x", pady=(3, 0))
 
-        f = self._section(self.left, "Telemetry data")
+        f = self._section(pane, "Telemetry data")
         row = tk.Frame(f, bg=PANEL)
         row.pack(fill="x")
         _btn(row, "Open GPX / CSV / VKX…", self.open_data).pack(
@@ -174,7 +217,7 @@ class App:
                                  fg=DIM, anchor="w", justify="left", wraplength=270)
         self.lbl_data.pack(fill="x", pady=(3, 0))
 
-        f = self._section(self.left, "Sync · offset (s) · trim")
+        f = self._section(pane, "Sync · offset (s) · trim")
         row = tk.Frame(f, bg=PANEL)
         row.pack(fill="x")
         self.var_off = tk.StringVar(value="0.0")
@@ -206,27 +249,28 @@ class App:
                                   anchor="w", justify="left", wraplength=270)
         self.lbl_clock.pack(fill="x", pady=(4, 0))
 
-        f = self._section(self.left, "Gauges · drag on preview")
+        f = self._section(pane, "Gauges · drag on preview")
         self.gauge_box = tk.Frame(f, bg=PANEL)
         self.gauge_box.pack(fill="x")
         row = tk.Frame(f, bg=PANEL)
         row.pack(fill="x", pady=(4, 0))
         _btn(row, "Add readout…", self.add_readout).pack(side="left")
         _btn(row, "Reset layout", self.reset_layout).pack(side="left", padx=(6, 0))
-        f = self._section(self.left, "Maneuvers · tacks & gybes")
+        f = self._section(pane, "Maneuvers · tacks & gybes")
         row = tk.Frame(f, bg=PANEL)
         row.pack(fill="x")
-        _btn(row, "Auto-detect", self.man_autodetect).pack(side="left")
-        _btn(row, "T @ cursor", lambda: self.man_add("T")).pack(
-            side="left", padx=(6, 0))
+        _btn(row, "T @ cursor", lambda: self.man_add("T")).pack(side="left")
         _btn(row, "G @ cursor", lambda: self.man_add("G")).pack(
             side="left", padx=(6, 0))
         _btn(row, "Edit…", self.open_maneuvers).pack(side="left", padx=(6, 0))
+        row = tk.Frame(f, bg=PANEL)
+        row.pack(fill="x", pady=(4, 0))
+        _btn(row, "Auto-detect", self.man_autodetect).pack(side="left")
         self.lbl_man = tk.Label(f, text="", font=F_MONO, bg=PANEL, fg=DIM,
                                 anchor="w")
         self.lbl_man.pack(fill="x", pady=(3, 0))
 
-        f = self._section(self.left, "Export")
+        f = self._section(pane, "Export")
         row = tk.Frame(f, bg=PANEL)
         row.pack(fill="x")
         self.var_out = tk.StringVar()
@@ -272,12 +316,13 @@ class App:
         self.lbl_status.pack(fill="x", pady=(3, 0))
         self.btn_folder = _btn(f, "Open output folder", self.open_out_folder)
 
-        f = self._section(self.left, "Project")
+        f = self._section(pane, "Project")
         row = tk.Frame(f, bg=PANEL)
         row.pack(fill="x", pady=(0, 10))
         _btn(row, "Save project…", self.save_project).pack(side="left")
         _btn(row, "Load project…", self.load_project).pack(side="left",
                                                                 padx=(6, 0))
+        _bind_wheel(self.lscroll, self.lscroll)
 
         # ---- center: preview canvas + maneuver marks + scrub bar ----
         self.canvas = tk.Canvas(center, bg=BG, highlightthickness=0)
@@ -450,16 +495,15 @@ class App:
         else:
             if not remap:
                 self.trim = [None, None]
+                # the maneuver list stays empty and is the user's to fill —
+                # by hand at the cursor, or with Auto-detect once the angle
+                # windows suit the boat
                 self.maneuvers = []
             self._apply_view()
             if not self.gauges:
                 self.gauges = gauges.default_gauges(self.tele)
             if self.vinfo and self.vinfo.creation_time and not remap:
                 self.sync_meta(quiet=True)
-            if not remap:
-                # detect tacks/gybes immediately so pointers show up
-                self._set_maneuvers(telemetry.detect_maneuvers(
-                    self.tele, tuple(self.t_rng), tuple(self.g_rng)))
         n = len(tele.streams)
         rng = tele.t_end - tele.t_start
         self.lbl_data.configure(
@@ -809,9 +853,19 @@ class App:
         self.maneuvers = mans
         self._maneuvers_changed()
 
+    def _confirm_replace(self, parent=None):
+        """Auto-detect overwrites the list — ask first if it has entries."""
+        if not self.maneuvers:
+            return True
+        return messagebox.askyesno(
+            APP_NAME, f"Replace the {len(self.maneuvers)} maneuvers in the "
+            "list with auto-detected ones?", parent=parent or self.root)
+
     def man_autodetect(self):
         if not self.tele:
             messagebox.showinfo(APP_NAME, "Load telemetry data first.")
+            return
+        if not self._confirm_replace():
             return
         found = telemetry.detect_maneuvers(self.tele, tuple(self.t_rng),
                                            tuple(self.g_rng))
@@ -858,12 +912,22 @@ class App:
                                             padx=(0, 8))
             vars_[name] = v
 
-        listf = tk.Frame(dlg, bg=PANEL)
-        listf.pack(fill="both", expand=True, padx=14, pady=4)
+        # the list scrolls so the buttons below stay reachable no matter how
+        # many maneuvers are in it
+        listwrap = tk.Frame(dlg, bg=PANEL)
+        listwrap.pack(fill="both", expand=True, padx=14, pady=4)
+        lscroll, listf = _scroll_area(listwrap, height=250, width=330)
+        hint = tk.Label(dlg, text="", font=F_MONO, bg=PANEL, fg=DIM,
+                        anchor="w", justify="left")
+        hint.pack(fill="x", padx=14)
 
         def rebuild_rows():
             for wdg in listf.winfo_children():
                 wdg.destroy()
+            hint.configure(
+                text="" if self.maneuvers else
+                "no maneuvers yet — add them at the cursor, or set\n"
+                "the angle windows above and press Auto-detect")
             numbered = telemetry.numbered_maneuvers(self.maneuvers)
             lbl_by_id = {id(m): lbl for m, lbl in numbered}
             for m in sorted(self.maneuvers, key=lambda m: m["t"]):
@@ -893,6 +957,7 @@ class App:
                 rb = _btn(row, "✕", remove)
                 rb.configure(padx=4, pady=0, font=("Segoe UI", 8))
                 rb.pack(side="right")
+            _bind_wheel(lscroll, lscroll)
 
         def get_ranges():
             try:
@@ -907,7 +972,7 @@ class App:
                 return False
 
         def detect():
-            if not get_ranges():
+            if not get_ranges() or not self._confirm_replace(parent=dlg):
                 return
             self.maneuvers = telemetry.detect_maneuvers(
                 self.tele, tuple(self.t_rng), tuple(self.g_rng))
@@ -960,6 +1025,7 @@ class App:
                 state="normal" if avail else "disabled",
                 disabledforeground=DIM)
             cb.pack(fill="x")
+        _bind_wheel(self.gauge_box, self.lscroll)
 
     def reset_layout(self):
         if self.tele:

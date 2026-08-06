@@ -23,8 +23,7 @@ SS = 2  # supersampling for prebuilt artwork
 DESIGN_H = 1080.0
 
 # palette (DESIGN.md)
-PANEL = (16, 16, 16, 186)
-PANEL_EDGE = (255, 255, 255, 18)
+SHADOW = (0, 0, 0, 175)   # text outline — gauges sit straight on the footage
 TEXT = (250, 250, 250, 255)
 MUTED = (167, 167, 167, 255)
 DIM = (111, 111, 111, 255)
@@ -74,6 +73,11 @@ def nice_max(v, candidates):
         if v <= c:
             return c
     return candidates[-1]
+
+
+def outline(k):
+    """dr.text kwargs for a thin dark outline, k = pixels per design unit."""
+    return {"stroke_width": max(1, int(round(1.3 * k))), "stroke_fill": SHADOW}
 
 
 def fmt_value(v, angular=False):
@@ -173,14 +177,12 @@ class Gauge:
         pass
 
     # ---- shared bits ----
-    def _panel(self, dr, w2, h2, k2, radius=16):
-        dr.rounded_rectangle([0, 0, w2 - 1, h2 - 1], radius=radius * k2,
-                             fill=PANEL, outline=PANEL_EDGE,
-                             width=max(1, int(k2)))
-
-    def _label_txt(self, dr, k2, text=None, x=14, y=9):
-        dr.text((x * k2, y * k2), (text or self.label).upper(),
-                font=font("uib", 14 * k2), fill=MUTED)
+    def _label_txt(self, dr, k2, x, y, text=None, anchor="ma"):
+        """Gauge title. x, y are pixels; default anchor centres it above the
+        instrument (anchor="la" left-aligns for the digit boxes)."""
+        dr.text((x, y), (text or self.label).upper(),
+                font=font("uib", 14 * k2), fill=MUTED, anchor=anchor,
+                **outline(k2))
 
     # ---- persistence ----
     def to_dict(self):
@@ -268,8 +270,7 @@ class CompassCard(Gauge):
 
     def _draw_face(self, dr, img, tele, w2, h2):
         k2 = h2 / self.DESIGN_H_
-        self._panel(dr, w2, h2, k2)
-        self._label_txt(dr, k2)
+        self._label_txt(dr, k2, self.CX * k2, 5 * k2)
 
     def _draw_dynamic(self, dr, img, tele, t, w, h, kx, ky):
         cx, cy = self.CX * ky, self.CY * ky
@@ -296,8 +297,7 @@ class NeedleCompass(Gauge):
 
     def _draw_face(self, dr, img, tele, w2, h2):
         k2 = h2 / self.DESIGN_H_
-        self._panel(dr, w2, h2, k2)
-        self._label_txt(dr, k2)
+        self._label_txt(dr, k2, self.CX * k2, 5 * k2)
         cx, cy = self.CX * k2, self.CY * k2
         r_out = 74 * k2
         for a in range(0, 360, 5):
@@ -313,7 +313,8 @@ class NeedleCompass(Gauge):
             a = i * 90
             tx, ty = az_xy(cx, cy, 68 * k2, a)
             dr.text((tx, ty), letter, font=font("uib", 15 * k2),
-                    fill=ACCENT if a == 0 else TEXT, anchor="mm")
+                    fill=ACCENT if a == 0 else TEXT, anchor="mm",
+                    **outline(k2))
 
     def _needle(self, ky):
         def build(dr, img, px2, k2):
@@ -333,7 +334,8 @@ class NeedleCompass(Gauge):
             dr = ImageDraw.Draw(img)
         dr.text((cx, 205 * ky), fmt_value(v, angular=True),
                 font=font("monob", 23 * ky),
-                fill=TEXT if v is not None else DIM, anchor="mm")
+                fill=TEXT if v is not None else DIM, anchor="mm",
+                **outline(ky))
 
 
 class WindAngleDial(Gauge):
@@ -349,8 +351,7 @@ class WindAngleDial(Gauge):
 
     def _draw_face(self, dr, img, tele, w2, h2):
         k2 = h2 / self.DESIGN_H_
-        self._panel(dr, w2, h2, k2)
-        self._label_txt(dr, k2)
+        self._label_txt(dr, k2, self.CX * k2, 5 * k2)
         cx, cy = self.CX * k2, self.CY * k2
         r_out = 74 * k2
         r_arc = 79 * k2
@@ -403,7 +404,7 @@ class WindAngleDial(Gauge):
             txt = f"{abs(d):.0f}°{side}"
             col = GREEN if d > 0 else (ACCENT if d < 0 else TEXT)
         dr.text((cx, 205 * ky), txt, font=font("monob", 23 * ky),
-                fill=col, anchor="mm")
+                fill=col, anchor="mm", **outline(ky))
 
 
 class SpeedDial(Gauge):
@@ -444,8 +445,7 @@ class SpeedDial(Gauge):
     def _draw_face(self, dr, img, tele, w2, h2):
         k2 = h2 / self.DESIGN_H_
         vmax = self.vmax_for(tele)
-        self._panel(dr, w2, h2, k2)
-        self._label_txt(dr, k2)
+        self._label_txt(dr, k2, self.CX * k2, 5 * k2)
         cx, cy, r = self.CX * k2, self.CY * k2, self.R * k2
         box = [cx - r, cy - r, cx + r, cy + r]
         dr.arc(box, self.AZ0 - 90, self.AZ0 + self.SWEEP - 90,
@@ -463,7 +463,7 @@ class SpeedDial(Gauge):
             if major:
                 tx, ty = az_xy(cx, cy, r - 26 * k2, a)
                 dr.text((tx, ty), f"{v:g}", font=font("mono", 13 * k2),
-                        fill=MUTED, anchor="mm")
+                        fill=MUTED, anchor="mm", **outline(k2))
             v += minor
 
     def _needle(self, ky):
@@ -496,9 +496,10 @@ class SpeedDial(Gauge):
             img.alpha_composite(spr, (int(cx - d / 2), int(cy - d / 2)))
             dr = ImageDraw.Draw(img)
         dr.text((cx, 186 * ky), fmt_value(v), font=font("monob", 30 * ky),
-                fill=TEXT if v is not None else DIM, anchor="mm")
+                fill=TEXT if v is not None else DIM, anchor="mm",
+                **outline(ky))
         dr.text((cx, 208 * ky), self.unit, font=font("ui", 12 * ky),
-                fill=MUTED, anchor="mm")
+                fill=MUTED, anchor="mm", **outline(ky))
 
 
 class HeelBar(Gauge):
@@ -538,9 +539,8 @@ class HeelBar(Gauge):
     def _draw_face(self, dr, img, tele, w2, h2):
         k2 = h2 / self.DESIGN_H_
         rng = self.rng_for(tele)
-        self._panel(dr, w2, h2, k2, radius=14)
-        self._label_txt(dr, k2)
         x0, x1, yc, hh = self._geom(w2, h2, k2)
+        self._label_txt(dr, k2, (x0 + x1) / 2, 5 * k2)
         dr.rounded_rectangle([x0, yc - hh, x1, yc + hh], radius=hh,
                              fill=(36, 36, 36, 220))
         cx = (x0 + x1) / 2
@@ -553,12 +553,13 @@ class HeelBar(Gauge):
                         width=max(1, int(1.2 * k2)))
                 if (d / step) % 2 == 0:
                     dr.text((x, yc + hh + 16 * k2), f"{int(d)}",
-                            font=font("ui", 10.5 * k2), fill=DIM, anchor="mm")
+                            font=font("ui", 10.5 * k2), fill=DIM, anchor="mm",
+                            **outline(k2))
             d += step
         dr.text((x0 - 13 * k2, yc), "P", font=font("uib", 12 * k2), fill=DIM,
-                anchor="mm")
+                anchor="mm", **outline(k2))
         dr.text((x1 + 13 * k2, yc), "S", font=font("uib", 12 * k2), fill=DIM,
-                anchor="mm")
+                anchor="mm", **outline(k2))
 
     def _draw_dynamic(self, dr, img, tele, t, w, h, kx, ky):
         rng = self.rng_for(tele)
@@ -580,7 +581,7 @@ class HeelBar(Gauge):
         col = DIM if v is None else (GREEN if v > 0 else
                                      (ACCENT if v < 0 else TEXT))
         dr.text((w - 16 * ky, 20 * ky), txt, font=font("monob", 24 * ky),
-                fill=col, anchor="rm")
+                fill=col, anchor="rm", **outline(ky))
 
 
 class TrackMap(Gauge):
@@ -752,7 +753,6 @@ class TrackMap(Gauge):
     # ---- drawing ----
     def _draw_face(self, dr, img, tele, w2, h2):
         k2 = h2 / self.DESIGN_H_
-        self._panel(dr, w2, h2, k2)
         if self.view_mode == "route":
             ts, pts, to_pt, bg = self._project(tele, w2 // SS, h2 // SS,
                                                k2 / SS)
@@ -772,16 +772,17 @@ class TrackMap(Gauge):
                 img.paste(crop, (int(ix0), int(iy0)),
                           self._mask(iw, ih, k2))
                 dr.text((ix1 - 5 * k2, iy1 - 4 * k2), m.attribution,
-                        font=font("ui", 9 * k2), fill=MUTED, anchor="rs")
+                        font=font("ui", 9 * k2), fill=MUTED, anchor="rs",
+                        **outline(k2))
             if len(pts) >= 2:
                 dr.line([(x * SS, y * SS) for x, y in pts], fill=TRACKLINE,
                         width=max(2, int(2.6 * k2)), joint="curve")
-        self._label_txt(dr, k2)
+        # no title on the map; the north arrow labels it
         nx, ny = w2 - 22 * k2, 20 * k2
         dr.polygon([(nx, ny - 8 * k2), (nx - 5 * k2, ny + 5 * k2),
-                    (nx + 5 * k2, ny + 5 * k2)], fill=DIM)
-        dr.text((nx, ny + 12 * k2), "N", font=font("uib", 10.5 * k2), fill=DIM,
-                anchor="mm")
+                    (nx + 5 * k2, ny + 5 * k2)], fill=MUTED)
+        dr.text((nx, ny + 12 * k2), "N", font=font("uib", 10.5 * k2), fill=MUTED,
+                anchor="mm", **outline(k2))
 
     def _dot(self, ky):
         def build(dr, img, px2, k2):
@@ -819,7 +820,7 @@ class TrackMap(Gauge):
             r = 3.5 * ky
             dr.ellipse([x - r, y - r, x + r, y + r], fill=col)
             dr.text((x + 5 * ky, y - 4 * ky), lbl, font=font("uib", 10.5 * ky),
-                    fill=TEXT, anchor="ls")
+                    fill=TEXT, anchor="ls", **outline(ky))
         if pos is not None:
             x, y = to_pt(*pos)
             spr = self._dot(ky)
@@ -849,7 +850,7 @@ class TrackMap(Gauge):
         if crop is not None:
             layer = crop.resize((iw, ih), Image.BILINEAR).convert("RGBA")
         else:
-            layer = Image.new("RGBA", (iw, ih), (22, 22, 22, 255))
+            layer = Image.new("RGBA", (iw, ih), (0, 0, 0, 0))
         ldr = ImageDraw.Draw(layer)
         ts, lats, lons = self._decimated(tele)
         pts = [to_pt(la, lo) for la, lo in zip(lats, lons)]
@@ -860,11 +861,13 @@ class TrackMap(Gauge):
         ldr = ImageDraw.Draw(layer)
         if attribution:
             ldr.text((iw - 5 * ky, ih - 4 * ky), attribution,
-                     font=font("ui", 9 * ky), fill=MUTED, anchor="rs")
+                     font=font("ui", 9 * ky), fill=MUTED, anchor="rs",
+                     **outline(ky))
         scale_txt = (f"{self.follow_m / 1000:.1f} km"
                      if self.follow_m >= 1000 else f"{self.follow_m:.0f} m")
         ldr.text((5 * ky, ih - 4 * ky), scale_txt,
-                 font=font("ui", 9 * ky), fill=MUTED, anchor="ls")
+                 font=font("ui", 9 * ky), fill=MUTED, anchor="ls",
+                 **outline(ky))
         img.paste(layer, (int(ix0), int(iy0)), self._mask(iw, ih, ky))
 
 
@@ -882,14 +885,14 @@ class DigitsBox(Gauge):
 
     def _draw_face(self, dr, img, tele, w2, h2):
         k2 = h2 / self.DESIGN_H_
-        self._panel(dr, w2, h2, k2, radius=14)
-        self._label_txt(dr, k2)
+        self._label_txt(dr, k2, 14 * k2, 5 * k2, anchor="la")
         unit = self.unit
         if unit is None and tele and self.stream in tele.streams:
             unit = tele.streams[self.stream].unit
         if unit:
             dr.text((w2 - 14 * k2, 16 * k2), unit,
-                    font=font("ui", 12 * k2), fill=DIM, anchor="rm")
+                    font=font("ui", 12 * k2), fill=DIM, anchor="rm",
+                    **outline(k2))
 
     def _draw_dynamic(self, dr, img, tele, t, w, h, kx, ky):
         s = tele.streams.get(self.stream) if tele else None
@@ -897,7 +900,8 @@ class DigitsBox(Gauge):
         angular = bool(s and s.angular)
         dr.text((14 * ky, 0.65 * h), fmt_value(v, angular),
                 font=font("monob", 37 * ky),
-                fill=TEXT if v is not None else DIM, anchor="lm")
+                fill=TEXT if v is not None else DIM, anchor="lm",
+                **outline(ky))
 
 
 GAUGE_KINDS = {c.KIND: c for c in

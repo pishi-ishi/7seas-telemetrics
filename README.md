@@ -45,13 +45,15 @@ you can build it from source yourself — see [Developing](#developing).
    **IN = cursor**; same for **OUT = cursor**. The track map, "align
    starts" reference, and maneuver detection all follow the trimmed window.
    **Clear trim** restores the full log.
-5. **Maneuvers** — detected automatically when data loads; the
-   **Auto-detect / T @ cursor / G @ cursor / Edit…** buttons manage them.
-   Course changes are classified as tacks (**T1, T2, …**, default
-   65–120°) or gybes (**G1, G2, …**, default 15–60°) — both angle windows
-   editable in **Edit…**. Untick false positives, ✕ to delete. Markers
-   appear on the track map (in the rendered video) and on the timeline
-   (click a mark to jump there).
+5. **Maneuvers** — the list starts **empty**: nothing is detected until you
+   ask for it. Mark them yourself with **T @ cursor / G @ cursor** as you
+   scrub, or open **Edit…**, set the angle windows — tacks (**T1, T2, …**,
+   default 65–120°), gybes (**G1, G2, …**, default 15–60°) — and press
+   **Auto-detect** to populate from the heading trace. Auto-detect replaces
+   the whole list, so it asks first if you have already marked some. The
+   list scrolls, and **Clear** empties it in one go. Untick false positives,
+   ✕ to delete one. Markers appear on the track map (in the rendered video)
+   and on the timeline (click a mark to jump there).
 6. **Arrange gauges** — drag them on the preview; **mouse-wheel over a
    gauge to zoom it**. Right-click for larger/smaller; the heel bar,
    digits boxes and track map also stretch **Wider / Narrower / Taller /
@@ -86,6 +88,10 @@ Built-in gauges: compass card (HDG), speed dial (SOG), heel bar
 (green = starboard, crimson = port), wind roses (TWD / COG), apparent
 wind angle dial (AWA, port/starboard sectors), TWS & AWS readouts, track
 map with maneuver pointers and map background, digits box (any stream).
+They sit straight on the footage — no boxes behind them — each titled
+directly above the instrument, with a thin dark outline on the text so it
+stays readable over bright water. The control panel scrolls, so the export
+controls stay reachable on short screens.
 
 **Save project…** stores file paths, column mapping, sync offset, trim,
 maneuvers, gauge layout, the quality preset and the audio choice in a

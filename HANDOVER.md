@@ -1,6 +1,6 @@
 # HANDOVER — 7seas-telemetrics
 
-Briefing for the next agent/contributor. State as of **v0.4.0, 2026-08-05**.
+Briefing for the next agent/contributor. State as of **v0.5.0, 2026-08-06**.
 
 ## What this is
 
@@ -16,10 +16,10 @@ gauges onto video and exports H.264 mp4. Owner: ruzbeh (GitHub:
 |---|---|
 | `telemetry.py` | GPX/CSV/VKX loading → `Telemetry` (streams dict, track, maneuvers). Epoch-seconds timeline; angles interpolated shortest-arc; speeds stored in **knots**. `trimmed()` cuts sample-exact. `detect_maneuvers()` classifies course changes: T (default 65–120°) / G (15–60°), 12 s half-window on unwrapped smoothed heading. |
 | `vkx.py` | Vakaros Atlas binary parser per the official spec (github.com/vakaros/vkx). Row 0x02 gives GNSS + NED quaternion → heading/pitch/roll. 0x0A wind is **apparent** → `awd`/`aws`; `awa` derived = AWD − HDG. Race-timer events (0x04) are parsed into `tele.race_events` but **unused so far** (auto-trim idea below). Unknown row keys resync by scanning for the next 0xFF page header. |
-| `gauges.py` | All gauge rendering. 1080p design space, scaled by frame height. Perf pattern: static faces drawn at 2x → cached at 1x; rotating parts (compass card, needles, dot) are prebuilt 1x sprites rotated per frame (rotation resampling = antialiasing); text is FreeType-AA at 1x. **Never draw large per-frame supersampled surfaces** — that was 70 ms/frame before this pattern (now ~16–23 ms). `HeelBar`/`DigitsBox`/`TrackMap` support per-axis stretch (`sx`/`sy`); circular gauges uniform only. `TrackMap` has `map_style` (none/street/satellite), `view_mode` (route/follow), `follow_m`. |
+| `gauges.py` | All gauge rendering. 1080p design space, scaled by frame height. Perf pattern: static faces drawn at 2x → cached at 1x; rotating parts (compass card, needles, dot) are prebuilt 1x sprites rotated per frame (rotation resampling = antialiasing); text is FreeType-AA at 1x. **Never draw large per-frame supersampled surfaces** — that was 70 ms/frame before this pattern (now ~16–23 ms). `HeelBar`/`DigitsBox`/`TrackMap` support per-axis stretch (`sx`/`sy`); circular gauges uniform only. `TrackMap` has `map_style` (none/street/satellite), `view_mode` (route/follow), `follow_m`. Since v0.5.0 there is **no panel plate** behind a gauge — `_panel()` is gone, gauges composite straight onto the frame, `_label_txt()` takes pixel x/y and centres the title above the instrument (anchor `ma`; `la` for the digit boxes, which have none above), `TrackMap` has no title at all, and every readout passes `**outline(k)` for a dark text stroke. Keep new text on `outline()` — without a plate, unstroked white on sunlit water is unreadable. |
 | `maptiles.py` | Slippy-tile mosaics: OSM street / Esri World Imagery, disk cache in `%LOCALAPPDATA%\7seas-telemetrics\tiles`, ≤140 tiles, zoom auto ≤17, darkened for overlay contrast. `service.prepare(track, style, pad)` blocking, or async with callback. Respect OSM tile policy (User-Agent set, light use only — do NOT bulk download). |
 | `videoio.py` | ffmpeg probe (banner parse, incl. source bitrate), frame extraction, realtime play stream (`-re`, 12 fps, rgb24 pipe), export: RGBA overlay frames piped into ffmpeg `overlay` filter; encoder auto-pick h264_qsv → h264_mf → libx264. `QUALITY_PRESETS` (high/medium/low) set output height, fps, overlay fps, CRF/ICQ and audio; `bitrate_cap()` = min(bpp budget, source bitrate × 1.6 × √shrink). `audio=False` → `-an`. **h264_qsv needs `-b:v` alongside `-global_quality`** or it ignores `-maxrate` and overshoots ~35%. Overlay is composed at the *output* size, so low quality also renders ~3x faster. |
-| `gui.py` | tkinter single-window editor. Threads do all ffmpeg/parse/tile work; results come back via `self.q` polled every 80 ms — **never touch tk from worker threads**. `tele_full` vs `tele` (trimmed view); `offset = tele.t_start + user_off`. Known tk gotcha handled in `_on_scrub`: `Scale.set()` fires its command **at idle**, so programmatic-echo values are ignored by comparing to `cur_t`. |
+| `gui.py` | tkinter single-window editor. Threads do all ffmpeg/parse/tile work; results come back via `self.q` polled every 80 ms — **never touch tk from worker threads**. `tele_full` vs `tele` (trimmed view); `offset = tele.t_start + user_off`. Known tk gotcha handled in `_on_scrub`: `Scale.set()` fires its command **at idle**, so programmatic-echo values are ignored by comparing to `cur_t`. `_scroll_area()` builds the canvas+frame scroll pairs (left panel, maneuver list) and `_bind_wheel()` walks a subtree binding `<MouseWheel>`; rebuilt subtrees must re-bind (see `_rebuild_gauge_list`). Two traps there: pack the **scrollbar before** the canvas — a canvas's default requested width exceeds the 320 px panel, so the packer leaves the scrollbar 1 px wide and unmapped; and bind the wheel per widget, never `bind_all`, or the preview's wheel-zoom scrolls the panel too. |
 | `cli.py` | `--selftest` (synthetic end-to-end, logs to `%TEMP%\7seas_log.txt`), `--export` headless, GUI default. Both take `--quality` and `--no-audio`. |
 | `project.py` | `.7seas.json` (v3) save/load (paths, mapping, offset, trim, maneuvers, quality preset, audio flag, gauge layout incl. stretch + map settings). |
 
@@ -59,6 +59,12 @@ the duration (≈18–36 MB over 38 min), and that part is real.
   uniform multiplier (mouse wheel), sx/sy stretch where `STRETCH = True`.
 - Windowed exe: `print` is unsafe → `cli._logger` writes to the log file.
 - All subprocesses need `CREATE_NO_WINDOW` (see `videoio.NOWIN`).
+- **Maneuvers are opt-in.** Loading data must leave `self.maneuvers`
+  empty — v0.4.0 auto-detected on load and a day-long log produced 127
+  markers the owner then deleted one by one. Detection only runs when the
+  user presses Auto-detect, which replaces the list and therefore confirms
+  first when it is not empty. Hand-added entries carry `mag = 0.0`
+  (unmeasured), which is why a hand-built list shows `0.0°` in the editor.
 
 ## Known issues / risks
 
